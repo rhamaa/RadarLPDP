@@ -13,25 +13,29 @@ from widgets.FFT import create_fft_widget
 from widgets.Sinewave import create_sinewave_widget
 from widgets.file import create_file_explorer_widget
 from widgets.controller import create_controller_widget
+from widgets.metrics import create_metrics_widget
 
 # --- Definisi Layout UI --- #
 def create_main_layout():
     """Mendefinisikan dan membuat semua widget di dalam window utama."""
     with dpg.window(tag="Primary Window"):
         with dpg.group(horizontal=True):
-            # Kolom kiri (70% lebar)
+            # Kolom kiri
             with dpg.group(tag="left_column"):
-                with dpg.child_window(label="PPI Desktop", tag="ppi_window", no_scrollbar=True):
+                with dpg.child_window(label="PPI Desktop", tag="ppi_window", no_scrollbar=True, width=-1, height=-1):
                     create_ppi_widget()
-                with dpg.child_window(label="FFT Desktop", tag="fft_window"):
+                with dpg.child_window(label="FFT Desktop", tag="fft_window", no_scrollbar=True, width=-1, height=-1):
                     create_fft_widget()
-            # Kolom kanan (sisa lebar)
+            
+            # Kolom kanan
             with dpg.group(tag="right_column"):
-                with dpg.child_window(label="File Explorer", tag="file_explorer_window"):
-                    create_file_explorer_widget()
-                with dpg.child_window(label="Sinewave", tag="sinewave_window"):
+                with dpg.child_window(label="Sinewave", tag="sinewave_window", no_scrollbar=True, width=-1, height=-1):
                     create_sinewave_widget()
-                with dpg.child_window(label="Controller", tag="controller_window"):
+                with dpg.child_window(label="Frequency Metrics", tag="metrics_window", no_scrollbar=True, width=-1, height=-1):
+                    create_metrics_widget()
+                with dpg.child_window(label="File Explorer", tag="file_explorer_window", no_scrollbar=True, width=-1, height=-1):
+                    create_file_explorer_widget()
+                with dpg.child_window(label="Controller", tag="controller_window", no_scrollbar=True, width=-1, height=-1):
                     create_controller_widget()
 
 # --- Titik Masuk Aplikasi --- #

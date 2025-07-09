@@ -58,6 +58,15 @@ def compute_fft(channel, sample_rate):
     frequencies_khz = fftfreq(n, d=1/sample_rate)[:n//2] / 1000
     return frequencies_khz, magnitudes_db
 
+def find_peak_metrics(frequencies, magnitudes):
+    """Menemukan frekuensi dan magnitudo puncak dari data FFT."""
+    if len(magnitudes) == 0:
+        return 0, 0
+    peak_index = np.argmax(magnitudes)
+    peak_freq = frequencies[peak_index]
+    peak_mag = magnitudes[peak_index]
+    return peak_freq, peak_mag
+
 # --- Worker Thread Functions --- #
 
 def fft_data_worker(result_queue: queue.Queue, stop_event: threading.Event):
@@ -90,12 +99,20 @@ def fft_data_worker(result_queue: queue.Queue, stop_event: threading.Event):
 
                 freqs_ch1, mag_ch1 = compute_fft(ch1_data, sr)
                 freqs_ch2, mag_ch2 = compute_fft(ch2_data, sr)
+
+                # Ekstrak metrik puncak
+                peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
+                peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
                 
                 result_data = {
                     "status": "done",
                     "freqs_ch1": freqs_ch1, "mag_ch1": mag_ch1,
                     "freqs_ch2": freqs_ch2, "mag_ch2": mag_ch2,
-                    "n_samples": n_samples, "sample_rate": sr
+                    "n_samples": n_samples, "sample_rate": sr,
+                    "metrics": {
+                        "ch1": {"peak_freq": peak_freq_ch1, "peak_mag": peak_mag_ch1},
+                        "ch2": {"peak_freq": peak_freq_ch2, "peak_mag": peak_mag_ch2}
+                    }
                 }
                 result_queue.put(result_data)
             

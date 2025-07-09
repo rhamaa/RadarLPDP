@@ -46,9 +46,22 @@ def update_ui_from_queues(queues):
         elif status == "done":
             update_time = time.strftime('%H:%M:%S')
             dpg.set_value("fft_status_text", f"Plot updated at: {update_time}")
-            dpg.set_value("fft_ch1_series", [result["freqs_ch1"].tolist(), result["mag_ch1"].tolist()])
-            dpg.set_value("fft_ch2_series", [result["freqs_ch2"].tolist(), result["mag_ch2"].tolist()])
-            
+            data = result
+            if "freqs_ch1" in data and "mag_ch1" in data:
+                dpg.set_value('fft_ch1_series', [data["freqs_ch1"], data["mag_ch1"]])
+            if "freqs_ch2" in data and "mag_ch2" in data:
+                dpg.set_value('fft_ch2_series', [data["freqs_ch2"], data["mag_ch2"]])
+
+            # Perbarui widget metrik jika data ada
+            if "metrics" in data:
+                metrics = data["metrics"]
+                # Channel 1
+                dpg.set_value("ch1_peak_freq", f"{metrics['ch1']['peak_freq']:.2f}")
+                dpg.set_value("ch1_peak_mag", f"{metrics['ch1']['peak_mag']:.2f}")
+                # Channel 2
+                dpg.set_value("ch2_peak_freq", f"{metrics['ch2']['peak_freq']:.2f}")
+                dpg.set_value("ch2_peak_mag", f"{metrics['ch2']['peak_mag']:.2f}")
+
             sr, n_samples = result["sample_rate"], result["n_samples"]
             freq_res = sr / n_samples if n_samples > 0 else 0
             plot_label = f'Live FFT Spectrum\nSR: {sr/1e6:.2f}MHz, N: {n_samples}, Res: {freq_res:.1f}Hz'
@@ -71,26 +84,40 @@ def update_ui_from_queues(queues):
         pass
 
 def resize_callback():
-    """Menyesuaikan ukuran layout saat window di-resize."""
+    """Menyesuaikan ukuran layout secara dinamis saat window di-resize."""
     if not dpg.is_dearpygui_running():
         return
-    
-    viewport_width = dpg.get_viewport_width()
-    viewport_height = dpg.get_viewport_height()
-    
-    left_width = int(viewport_width * 0.7)
-    dpg.set_item_width("left_column", left_width)
-    dpg.set_item_width("right_column", -1)
-    
-    available_height = viewport_height - (APP_PADDING * 2)
-    left_col_height = available_height - APP_SPACING
-    right_col_height = available_height - (APP_SPACING * 2)
-    
-    dpg.set_item_height("ppi_window", int(left_col_height * 0.6))
-    dpg.set_item_height("fft_window", int(left_col_height * 0.4))
-    dpg.set_item_height("file_explorer_window", int(right_col_height * 0.35))
-    dpg.set_item_height("sinewave_window", int(right_col_height * 0.35))
-    dpg.set_item_height("controller_window", int(right_col_height * 0.30))
+
+    viewport_width = dpg.get_viewport_client_width()
+    viewport_height = dpg.get_viewport_client_height()
+
+    # Tentukan padding dan spasi untuk kalkulasi
+    padding = APP_PADDING * 2
+    spacing = APP_SPACING
+
+    # Kalkulasi lebar kolom
+    left_col_width = int(viewport_width * 0.7) - spacing
+    right_col_width = viewport_width - left_col_width - (spacing * 2)
+
+    dpg.set_item_width("left_column", left_col_width)
+    dpg.set_item_width("right_column", right_col_width)
+
+    # Kalkulasi tinggi panel di kolom kiri
+    available_height_left = viewport_height - padding
+    ppi_height = int(available_height_left * 0.65) - spacing
+    fft_height = available_height_left - ppi_height - spacing
+
+    dpg.set_item_height("ppi_window", ppi_height)
+    dpg.set_item_height("fft_window", fft_height)
+
+    # Kalkulasi tinggi panel di kolom kanan
+    available_height_right = viewport_height - padding
+    panel_height = (available_height_right - (spacing * 3)) // 4
+
+    dpg.set_item_height("sinewave_window", panel_height)
+    dpg.set_item_height("metrics_window", panel_height)
+    dpg.set_item_height("file_explorer_window", panel_height)
+    dpg.set_item_height("controller_window", panel_height)
 
 def cleanup_and_exit(stop_event, threads):
     """Memberhentikan thread worker dengan aman dan menutup Dear PyGui."""
