@@ -43,14 +43,20 @@ def load_and_process_data(filepath, sr):
         return None, None, None, None
 
 def compute_fft(channel, sample_rate):
-    """Menghitung FFT untuk satu channel."""
+    """Menghitung FFT dan mengonversi magnitudo ke dB."""
     n = len(channel)
     if n == 0:
         return np.array([]), np.array([])
+    
     fft_vals = fft(channel)
     magnitudes = np.abs(fft_vals)[:n//2]
-    frequencies = fftfreq(n, d=1/sample_rate)[:n//2]
-    return frequencies, magnitudes
+    
+    # Konversi ke dB, hindari log(0) dengan menambahkan nilai epsilon kecil
+    magnitudes_db = 20 * np.log10(magnitudes + 1e-9)
+    
+    # Hitung frekuensi dan konversi ke KHz
+    frequencies_khz = fftfreq(n, d=1/sample_rate)[:n//2] / 1000
+    return frequencies_khz, magnitudes_db
 
 # --- Worker Thread Functions --- #
 
@@ -126,11 +132,12 @@ def sinewave_data_worker(result_queue: queue.Queue, stop_event: threading.Event)
                 if ch1_data is None or n_samples == 0:
                     continue
                 
-                time_axis = np.linspace(0, n_samples / sr, n_samples, endpoint=False)
+                # Konversi sumbu waktu ke mikrodetik (µs)
+                time_axis_us = np.linspace(0, n_samples / sr, n_samples, endpoint=False) * 1e6
                 
                 result_data = {
                     "status": "done",
-                    "time_axis": time_axis,
+                    "time_axis": time_axis_us,
                     "ch1_data": ch1_data,
                     "ch2_data": ch2_data
                 }
