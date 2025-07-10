@@ -6,63 +6,69 @@ Dokumen ini memberikan gambaran teknis tentang arsitektur, alur data, dan kompon
 
 ## Arsitektur Umum: Dekopling Sudut dan Data
 
-Aplikasi ini menggunakan `dearpygui` untuk antarmuka pengguna (UI) dan `threading` untuk pemrosesan data secara konkuren. Arsitektur terbaru ini dirancang dengan prinsip **dekopling (pemisahan)** antara **sumber data sudut sapuan** dan **sumber data deteksi target**. Ini memungkinkan fleksibilitas maksimum, terutama untuk integrasi dengan hardware eksternal (seperti Arduino) di masa depan.
-
-Komponen utama meliputi:
-
-1.  **UI Widgets** (`widgets/`): Modul yang mendefinisikan elemen UI (plot PPI, plot sinewave, dll.).
-2.  **Data Processing Workers** (`functions/data_processing.py`): Kumpulan thread independen yang masing-masing memiliki satu tanggung jawab spesifik.
-3.  **UI Callbacks** (`app/callbacks.py`): Fungsi yang menjadi jembatan antara data dari worker dan pembaruan visual di UI.
-4.  **Konfigurasi** (`config.py`): File terpusat untuk semua parameter penting.
+Aplikasi ini menggunakan `dearpygui` untuk UI, `threading` untuk konkurensi, dan `pyserial` untuk komunikasi hardware. Arsitektur ini dirancang dengan prinsip **dekopling (pemisahan)** antara **sumber data sudut sapuan** (dari hardware) dan **sumber data deteksi target** (dari file).
 
 ---
 
-## Alur Data Terpisah
+## Prasyarat & Setup
 
-Alur data dirancang agar *thread-safe* menggunakan `queue.Queue` dan sekarang sepenuhnya terpisah.
+Sebelum menjalankan aplikasi, pastikan hal-hal berikut terpenuhi.
 
-1.  **`dumy_gen.py`**: Skrip ini mensimulasikan **data deteksi** dengan menulis sinyal ke `live/live_acquisition_ui.bin`.
+### 1. Dependensi Python
 
-2.  **Worker Threads**:
-    - **`angle_worker`**: **Sumber kebenaran untuk sudut sapuan**. Worker ini secara independen menghasilkan sudut sapuan (0°-180° bolak-balik) dengan kecepatan konstan. Di masa depan, worker inilah yang akan dimodifikasi untuk membaca data dari port serial Arduino. Ia mengirimkan pesan `{'type': 'sweep', 'angle': ...}` ke `ppi_queue`.
-    - **`fft_data_worker`**: **Sumber kebenaran untuk deteksi target**. Worker ini hanya memantau `live_acquisition_ui.bin`. Jika ada file baru, ia melakukan FFT, menghitung jarak target, dan mengirimkan pesan `{'type': 'target', 'distance': ...}` ke `ppi_queue`. Worker ini **tidak tahu menahu tentang sudut sapuan**.
-    - **`sinewave_data_worker`**: Memproses file yang sama untuk menampilkan plot sinewave mentah.
+Pastikan semua pustaka terinstal di dalam virtual environment Anda:
 
-3.  **Antrian (Queues)**:
-    - `ppi_queue`: Antrian kunci yang menerima **dua jenis pesan** dari dua worker yang berbeda: pesan `sweep` dari `angle_worker` dan pesan `target` dari `fft_data_worker`.
-    - `fft_queue` & `sinewave_queue`: Berfungsi seperti sebelumnya untuk metrik dan plot sinewave.
+```bash
+source .venv/bin/activate
+pip install dearpygui numpy scipy pyserial
+```
 
-4.  **`update_ui_from_queues` (di `app/callbacks.py`)**:
-    - Fungsi ini berjalan di setiap frame dan bertindak sebagai **koordinator cerdas**.
-    - Ia menyimpan `last_known_angle` terakhir yang diterima dari pesan `sweep`.
-    - Ketika pesan `target` diterima, ia akan mem-plot target tersebut pada `last_known_angle` yang tersimpan.
-    - Ini memastikan UI selalu responsif dan pergerakan sapuan tetap mulus, terlepas dari apakah ada target baru atau tidak.
+### 2. Hardware (ESP32/Arduino)
 
-## 5. Rincian Modul Penting
+- Diperlukan perangkat keras (seperti ESP32 atau Arduino) yang terhubung ke komputer melalui USB.
+- Unggah firmware yang ada di `Control/Control.ino` ke perangkat Anda. Firmware ini akan mengirimkan data sudut (0-180) secara terus-menerus melalui port serial.
 
-### `functions/data_processing.py`
-- **Tujuan**: Rumah bagi semua logika pemrosesan data inti. Kode telah direfaktorisasi menjadi beberapa fungsi modular untuk kejelasan.
-- **Fungsi Kunci**:
-  - `fft_data_worker()`: Fungsi worker utama yang mengoordinasikan seluruh proses dari pembacaan data hingga pengiriman ke antrian.
-  - `process_channel_data()`: Melakukan FFT pada data mentah dan mengembalikan hasil yang terstruktur.
-  - `calculate_target_distance()`: Menerapkan formula untuk menghitung jarak target dari metrik FFT.
-  - `update_sweep_angle()`: Mengelola logika sapuan radar 180 derajat bolak-balik.
+### 3. Konfigurasi Aplikasi
 
-### `widgets/PPI.py`
-- **Tujuan**: Mendefinisikan dan mengontrol widget PPI.
-- **Fungsi Kunci**:
-  - `create_ppi_widget()`: Menginisialisasi plot PPI 180 derajat, termasuk sumbu, batas, dan busur penanda jarak.
-  - `update_ppi_widget()`: Fungsi terpusat yang dipanggil dari `callbacks` untuk memperbarui visual PPI. Menerima sudut dan daftar target, lalu menggambar ulang garis sapuan dan titik-titik target.
+Buka file `config.py` dan sesuaikan pengaturan berikut jika perlu:
+- `SERIAL_PORT`: Pastikan ini sesuai dengan port serial perangkat Anda (misalnya, `/dev/ttyUSB0` di Linux atau `COM3` di Windows).
+- `BAUD_RATE`: Harus cocok dengan baud rate di kode Arduino (saat ini `115200`).
 
-### `app/callbacks.py`
-- **Tujuan**: Bertindak sebagai jembatan antara data dari worker dan UI.
-- **Fungsi Kunci**:
-  - `update_ui_from_queues()`: Loop utama yang berjalan di setiap frame UI. Mengambil data dari `fft_queue` dan `ppi_queue` (tanpa memblokir) dan mendistribusikannya ke widget yang sesuai. Untuk PPI, ia memanggil `update_ppi_widget` dengan data yang relevan.
+### 4. Izin Port Serial (Khusus Linux)
+
+Secara default, user biasa tidak memiliki izin untuk mengakses port serial. Anda akan mendapatkan error "Permission Denied". Untuk mengatasinya, jalankan perintah berikut sekali:
+
+```bash
+sudo chmod a+rw /dev/ttyUSB0
+```
+*(Ganti `/dev/ttyUSB0` dengan port Anda jika berbeda)*.
+
+Untuk solusi permanen, tambahkan user Anda ke grup `dialout`:
+`sudo usermod -a -G dialout $USER` (memerlukan logout/login ulang).
+
+---
+
+## Alur Data dengan Hardware
+
+1.  **Hardware (ESP32)**: Mengirimkan baris data sudut (`"0"`, `"1"`, ..., `"180"`) melalui serial.
+2.  **`angle_worker`**: Membaca data dari `SERIAL_PORT`. Setiap baris yang valid diubah menjadi angka dan dikirim ke `ppi_queue` sebagai pesan `{'type': 'sweep'}`.
+3.  **`fft_data_worker`**: Tetap sama, memantau `live_acquisition_ui.bin` dan mengirimkan pesan `{'type': 'target'}` ke `ppi_queue`.
+4.  **`update_ui_from_queues`**: Tetap sama, mengoordinasikan kedua jenis pesan untuk menampilkan sapuan dan target secara akurat.
+
+---
+
+## Modul Utama dan Tanggung Jawab
+
+- **`functions/data_processing.py` -> `angle_worker`**: Tanggung jawabnya sekarang adalah **membaca dan mem-parsing data dari port serial**. Fungsi ini berisi semua logika untuk menangani koneksi, diskoneksi, dan error pembacaan data serial.
+
+- **`config.py`**: Menyimpan konfigurasi hardware (`SERIAL_PORT`, `BAUD_RATE`, `SERIAL_TIMEOUT`).
+
+- **`Control/Control.ino`**: Kode firmware untuk ESP32/Arduino. Kecepatan sapuan dapat diatur dengan mengubah variabel `sweep_delay` di dalam file ini.
 
 ### `app/callbacks.py`
 - **Tujuan**: Jantung dari interaktivitas UI.
 - **Fungsi Kunci**:
-  - `update_ui_from_queues()`: Dipanggil setiap frame di loop utama. Mengambil data dari semua `queue` dan memperbarui nilai widget DPG.
+  - `update_ui_from_queues()`: Loop utama yang berjalan di setiap frame UI. Mengambil data dari `fft_queue` dan `ppi_queue` (tanpa memblokir) dan mendistribusikannya ke widget yang sesuai. Untuk PPI, ia memanggil `update_ppi_widget` dengan data yang relevan.
   - `resize_callback()`: Dipanggil saat jendela diubah ukurannya. Menghitung ulang dimensi semua panel secara dinamis untuk menciptakan tata letak yang responsif.
   - `cleanup_and_exit()`: Memastikan semua thread dihentikan dengan aman saat aplikasi ditutup.
 
