@@ -11,7 +11,8 @@ import collections
 from scipy.fft import fft, fftfreq
 
 # Impor konfigurasi terpusat
-from config import FILENAME, SAMPLE_RATE, WORKER_REFRESH_INTERVAL
+from config import FILENAME, SAMPLE_RATE, WORKER_REFRESH_INTERVAL, SERIAL_PORT, BAUD_RATE, SERIAL_TIMEOUT
+import serial # Tambahkan impor untuk komunikasi serial
 
 # --- Helper Functions --- #
 
@@ -119,22 +120,40 @@ def update_sweep_angle(current_angle, direction, increment):
 # --- Worker Thread Functions --- #
 
 def angle_worker(ppi_queue: queue.Queue, stop_event: threading.Event):
-    """Menghasilkan sudut sapuan secara independen dan mengirimkannya ke antrian PPI."""
-    current_angle = 0
-    angle_increment = 2
-    sweep_direction = 1
-
+    """Membaca data sudut dari port serial dan mengirimkannya ke antrian PPI."""
     while not stop_event.is_set():
         try:
-            current_angle, sweep_direction = update_sweep_angle(current_angle, sweep_direction, angle_increment)
-            
-            # Kirim hanya data sudut dan sapuan
-            ppi_queue.put({"type": "sweep", "angle": current_angle})
+            # Coba buka port serial
+            with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT) as ser:
+                print(f"Berhasil terhubung ke port serial {SERIAL_PORT}")
+                while not stop_event.is_set():
+                    if ser.in_waiting > 0:
+                        try:
+                            # Baca satu baris dari serial, hilangkan whitespace, dan decode
+                            line = ser.readline().strip()
+                            if not line:
+                                continue
 
-        except Exception as e:
-            print(f"Error in angle_worker: {e}")
+                            angle_str = line.decode('utf-8')
+                            angle = int(float(angle_str)) # Konversi ke float dulu untuk menangani angka seperti "180.0"
+                            
+                            # Validasi rentang sudut
+                            if 0 <= angle <= 180:
+                                ppi_queue.put({"type": "sweep", "angle": angle})
+                            else:
+                                print(f"Data sudut di luar rentang diterima: {angle}")
+
+                        except ValueError:
+                            print(f"Gagal mengonversi data serial ke angka: '{line.decode('utf-8', errors='ignore')}'")
+                        except Exception as read_e:
+                            print(f"Error saat membaca data serial: {read_e}")
         
-        time.sleep(WORKER_REFRESH_INTERVAL)
+        except serial.SerialException:
+            print(f"Gagal terhubung ke {SERIAL_PORT}. Periksa koneksi. Mencoba lagi dalam 5 detik...")
+            time.sleep(5)
+        except Exception as e:
+            print(f"Error tak terduga di angle_worker: {e}")
+            time.sleep(5)
 
 def fft_data_worker(fft_queue: queue.Queue, ppi_queue: queue.Queue, stop_event: threading.Event):
     """Memonitor file, menghitung FFT & metrik, menghitung jarak target, dan mengirim data ke antrian FFT & PPI."""

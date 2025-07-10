@@ -19,6 +19,11 @@ SAMPLE_RATE = 20_000_000  # 20 MHz
 POLLING_INTERVAL = 0.5  # Detik (sudah tidak digunakan oleh fft_worker)
 WORKER_REFRESH_INTERVAL = 0.05 # Detik, untuk refresh UI ~20 FPSali per detik
 
+# --- Pengaturan Serial Port ---
+SERIAL_PORT = '/dev/ttyUSB0'  # Port untuk ESP32/Arduino
+BAUD_RATE = 115200            # Harus sama dengan yang di kode Arduino
+SERIAL_TIMEOUT = 1            # Timeout untuk pembacaan serial (dalam detik)
+
 # --- Konfigurasi Tampilan ---
 APP_SPACING = 8
 APP_PADDING = 8
