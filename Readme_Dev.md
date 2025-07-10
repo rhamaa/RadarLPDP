@@ -9,22 +9,23 @@ Dokumen ini memberikan rincian teknis mengenai arsitektur, struktur kode, alur d
 Aplikasi ini dirancang untuk memvisualisasikan data radar secara real-time. Arsitektur utamanya didasarkan pada **pemisahan antara UI dan logika pemrosesan data** menggunakan model multi-threading untuk menjaga agar antarmuka pengguna (UI) tetap responsif.
 
 - **Main Thread**: Didedikasikan sepenuhnya untuk menjalankan loop Dear PyGui (DPG), me-render UI, dan menangani interaksi pengguna. Thread ini tidak melakukan operasi I/O atau komputasi berat.
-- **Worker Threads**: Berjalan di latar belakang untuk menangani tugas-tugas berat seperti:
-  - Membaca file data biner dari disk.
-  - Melakukan transformasi Fourier Cepat (FFT).
-  - Mengekstrak metrik.
-  - Menyiapkan data untuk visualisasi.
-- **Komunikasi Antar-Thread**: Menggunakan `queue.Queue` dari Python sebagai mekanisme komunikasi yang aman (thread-safe) untuk mengirim data dari worker threads ke main thread.
-
- <!-- Placeholder untuk diagram arsitektur -->
+- **Worker Thread (`fft_data_worker`)**: Satu thread pekerja utama berjalan di latar belakang untuk menangani semua tugas berat, termasuk:
+  - Membaca file data biner dari disk (`live/live_acquisition_ui.bin`).
+  - Melakukan Transformasi Fourier Cepat (FFT) pada kedua channel.
+  - Mengekstrak metrik puncak (frekuensi & magnitudo).
+  - Menghitung jarak target berdasarkan metrik.
+  - Mengelola logika sapuan radar 180 derajat (bolak-balik).
+  - Menyiapkan data untuk dikirim ke UI.
+- **Komunikasi Antar-Thread**: Menggunakan `queue.Queue` dari Python sebagai mekanisme komunikasi yang aman (thread-safe) untuk mengirim data dari worker thread ke main thread. Ada dua antrian utama: `fft_queue` dan `ppi_queue`.
 
 ---
 
 ## 2. Dependensi
 
-Aplikasi ini memerlukan beberapa pustaka pihak ketiga. Anda dapat menginstalnya menggunakan pip:
+Aplikasi ini memerlukan beberapa pustaka pihak ketiga. Anda dapat menginstalnya menggunakan pip dari virtual environment:
 
 ```bash
+source .venv/bin/activate
 pip install dearpygui numpy scipy
 ```
 
@@ -39,23 +40,17 @@ pip install dearpygui numpy scipy
 ```
 /RadarLPDP
 ├── app/
-│   ├── __init__.py
-│   ├── callbacks.py      # Logika untuk update UI & event handling
-│   └── setup.py          # Inisialisasi DPG, tema, dan threads
+│   ├── callbacks.py      # Logika untuk update UI dari antrian & event handling
+│   └── setup.py          # Inisialisasi DPG, tema, dan worker thread
 ├── functions/
-│   ├── __init__.py
-│   └── data_processing.py  # Fungsi worker, FFT, & ekstraksi data
-├── log/
-│   └── (File log akan muncul di sini)
+│   └── data_processing.py  # Logika inti: worker, FFT, kalkulasi target
 ├── live/
-│   └── live_acquisition_ui.bin # File data biner
+│   └── live_acquisition_ui.bin # File data biner real-time
 ├── widgets/
-│   ├── __init__.py
-│   ├── PPI.py            # Widget Plan Position Indicator
+│   ├── PPI.py            # Widget Plan Position Indicator (180°)
 │   ├── FFT.py            # Widget spektrum FFT
 │   ├── Sinewave.py       # Widget plot sinyal mentah
 │   ├── controller.py     # Widget kontrol aplikasi
-│   ├── file.py           # Widget file explorer untuk log
 │   └── metrics.py        # Widget tabel metrik frekuensi
 ├── config.py             # File konfigurasi terpusat
 ├── dumy_gen.py           # Skrip untuk menghasilkan data biner dummy
@@ -67,37 +62,38 @@ pip install dearpygui numpy scipy
 
 ## 4. Alur Data (Data Flow)
 
-1.  **Generasi Data**: `dumy_gen.py` menghasilkan file `live/live_acquisition_ui.bin` yang berisi data sinyal mentah.
-2.  **Deteksi & Pembacaan**: Worker thread di `functions/data_processing.py` memonitor perubahan pada file tersebut. Jika ada perubahan, file dibaca.
-3.  **Pemrosesan**: Data biner di-unpack, diubah menjadi array NumPy, dan diproses. Worker yang berbeda menghitung FFT, mengekstrak metrik puncak, dan menyiapkan data sinewave.
-4.  **Pengiriman Data**: Hasil pemrosesan (array frekuensi, magnitudo, data waktu, metrik) dimasukkan ke dalam `queue` yang sesuai (`fft_queue`, `sinewave_queue`).
-5.  **Penerimaan & Update UI**: Di main thread, fungsi `app/callbacks.py:update_ui_from_queues` secara terus-menerus memeriksa `queue`. Jika ada data baru, fungsi ini akan mengambilnya dan memperbarui elemen Dear PyGui yang relevan (misalnya, `dpg.set_value` pada series plot atau teks).
+1.  **Generasi Data**: `dumy_gen.py` secara periodik menulis ulang `live/live_acquisition_ui.bin` dengan data sinyal baru.
+2.  **Deteksi & Proses**: `fft_data_worker` di `functions/data_processing.py` memonitor perubahan file. Jika ada perubahan, ia memanggil fungsi pembantu untuk:
+    a. Membaca file dan melakukan FFT (`process_channel_data`).
+    b. Menghitung jarak target dari hasil FFT (`calculate_target_distance`).
+3.  **Update Sudut Sapuan**: Secara bersamaan, worker memperbarui sudut sapuan radar, membuatnya bergerak bolak-balik antara 0 dan 180 derajat (`update_sweep_angle`).
+4.  **Pengiriman Data**: Worker menempatkan dua paket data ke dalam antrian yang berbeda:
+    - **`fft_queue`**: Berisi data spektrum lengkap (frekuensi, magnitudo) untuk widget FFT dan Metrik.
+    - **`ppi_queue`**: Berisi sudut sapuan saat ini dan daftar riwayat target (sudut, jarak) untuk widget PPI.
+5.  **Penerimaan & Update UI**: Di main thread, `app/callbacks.py:update_ui_from_queues` secara terus-menerus memeriksa kedua antrian. Jika ada data baru, ia mengambilnya dan memanggil fungsi yang relevan untuk memperbarui elemen UI, seperti `widgets.PPI:update_ppi_widget`.
 
 ---
 
-## 5. Rincian Modul
+## 5. Rincian Modul Penting
 
-### `main.py`
-- **Tujuan**: Titik masuk utama aplikasi.
-- **Tanggung Jawab**: 
-  - Mengimpor semua widget dari direktori `widgets/`.
-  - Mendefinisikan struktur dan tata letak UI utama menggunakan `dpg.window`, `dpg.group`, dan `dpg.child_window`.
-  - Memanggil fungsi setup dari `app/setup.py`.
-  - Menjalankan loop utama `dpg.is_dearpygui_running()`.
-- **Komunikasi**: Memanggil fungsi dari `app.setup`, `app.callbacks`, dan semua modul di `widgets`.
-
-### `config.py`
-- **Tujuan**: Konfigurasi terpusat.
-- **Isi**: Menyimpan konstanta global seperti path file, sample rate, interval polling, warna tema, dan padding UI.
-- **Keuntungan**: Menghindari *hardcoding* dan memudahkan perubahan parameter di satu tempat.
-
-### `app/setup.py`
-- **Tujuan**: Menangani semua logika inisialisasi.
+### `functions/data_processing.py`
+- **Tujuan**: Rumah bagi semua logika pemrosesan data inti. Kode telah direfaktorisasi menjadi beberapa fungsi modular untuk kejelasan.
 - **Fungsi Kunci**:
-  - `setup_dpg()`: Membuat viewport, mengatur tema, dan mendaftarkan `resize_callback`.
-  - `initialize_queues_and_events()`: Membuat instance dari semua `queue` dan `threading.Event` yang diperlukan.
-  - `start_worker_threads()`: Memulai semua worker thread (FFT, Sinewave, PPI).
-- **Output**: Mengembalikan `queues` dan `threads` yang akan digunakan oleh `main.py` dan `app/callbacks.py`.
+  - `fft_data_worker()`: Fungsi worker utama yang mengoordinasikan seluruh proses dari pembacaan data hingga pengiriman ke antrian.
+  - `process_channel_data()`: Melakukan FFT pada data mentah dan mengembalikan hasil yang terstruktur.
+  - `calculate_target_distance()`: Menerapkan formula untuk menghitung jarak target dari metrik FFT.
+  - `update_sweep_angle()`: Mengelola logika sapuan radar 180 derajat bolak-balik.
+
+### `widgets/PPI.py`
+- **Tujuan**: Mendefinisikan dan mengontrol widget PPI.
+- **Fungsi Kunci**:
+  - `create_ppi_widget()`: Menginisialisasi plot PPI 180 derajat, termasuk sumbu, batas, dan busur penanda jarak.
+  - `update_ppi_widget()`: Fungsi terpusat yang dipanggil dari `callbacks` untuk memperbarui visual PPI. Menerima sudut dan daftar target, lalu menggambar ulang garis sapuan dan titik-titik target.
+
+### `app/callbacks.py`
+- **Tujuan**: Bertindak sebagai jembatan antara data dari worker dan UI.
+- **Fungsi Kunci**:
+  - `update_ui_from_queues()`: Loop utama yang berjalan di setiap frame UI. Mengambil data dari `fft_queue` dan `ppi_queue` (tanpa memblokir) dan mendistribusikannya ke widget yang sesuai. Untuk PPI, ia memanggil `update_ppi_widget` dengan data yang relevan.
 
 ### `app/callbacks.py`
 - **Tujuan**: Jantung dari interaktivitas UI.

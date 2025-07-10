@@ -93,14 +93,17 @@ def process_channel_data(filepath, sr):
     return fft_result, fft_result["metrics"]
 
 def calculate_target_distance(metrics):
-    """Menghitung jarak target berdasarkan metrik puncak."""
+    """Menghitung jarak target berdasarkan metrik puncak dari kedua channel."""
     if not metrics:
         return None
     
-    peak_freq = metrics["ch1"]["peak_freq"]
-    peak_mag = metrics["ch1"]["peak_mag"]
+    # Ambil metrik dari kedua channel
+    val_ch1 = metrics["ch1"]["peak_freq"] * metrics["ch1"]["peak_mag"]
+    val_ch2 = metrics["ch2"]["peak_freq"] * metrics["ch2"]["peak_mag"]
     
-    distance = (peak_freq * peak_mag) / 1000
+    # Gabungkan nilai dari kedua channel dan bagi dengan 1000 (2 * 500)
+    distance = (val_ch1 + val_ch2) / 1000
+    
     if distance > 1:
         return min(distance, 50) # Kembalikan jarak yang sudah di-clamp
     return None

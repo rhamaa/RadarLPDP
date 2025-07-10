@@ -38,7 +38,7 @@ try:
         print(f"File updated at {time.strftime('%H:%M:%S')} with freqs ~{freq1/1000:.1f}kHz and ~{freq2/1000:.1f}kHz")
         
         # Tunggu sebelum update berikutnya
-        time.sleep(0.5)
+        time.sleep(0.05)
 
 except KeyboardInterrupt:
     print("\nSimulation stopped.")
