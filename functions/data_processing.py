@@ -11,7 +11,7 @@ import collections
 from scipy.fft import fft, fftfreq
 
 # Impor konfigurasi terpusat
-from config import FILENAME, SAMPLE_RATE, POLLING_INTERVAL
+from config import FILENAME, SAMPLE_RATE, WORKER_REFRESH_INTERVAL
 
 # --- Helper Functions --- #
 
@@ -118,51 +118,56 @@ def update_sweep_angle(current_angle, direction, increment):
 
 # --- Worker Thread Functions --- #
 
+def angle_worker(ppi_queue: queue.Queue, stop_event: threading.Event):
+    """Menghasilkan sudut sapuan secara independen dan mengirimkannya ke antrian PPI."""
+    current_angle = 0
+    angle_increment = 2
+    sweep_direction = 1
+
+    while not stop_event.is_set():
+        try:
+            current_angle, sweep_direction = update_sweep_angle(current_angle, sweep_direction, angle_increment)
+            
+            # Kirim hanya data sudut dan sapuan
+            ppi_queue.put({"type": "sweep", "angle": current_angle})
+
+        except Exception as e:
+            print(f"Error in angle_worker: {e}")
+        
+        time.sleep(WORKER_REFRESH_INTERVAL)
+
 def fft_data_worker(fft_queue: queue.Queue, ppi_queue: queue.Queue, stop_event: threading.Event):
     """Memonitor file, menghitung FFT & metrik, menghitung jarak target, dan mengirim data ke antrian FFT & PPI."""
     last_modified_time = 0
     filepath = FILENAME
     sr = SAMPLE_RATE
     
-    current_angle = 0
-    angle_increment = 2
-    sweep_direction = 1
-    target_history = []
+    last_modified_time = 0
+    filepath = FILENAME
+    sr = SAMPLE_RATE
 
     while not stop_event.is_set():
         try:
-            # 1. Perbarui sudut sapuan
-            current_angle, sweep_direction = update_sweep_angle(current_angle, sweep_direction, angle_increment)
-
-            # 2. Periksa pembaruan file dan proses data jika ada
             if os.path.exists(filepath):
                 modified_time = os.path.getmtime(filepath)
                 if modified_time != last_modified_time:
                     last_modified_time = modified_time
                     fft_queue.put({"status": "processing"})
                     
-                    # 3. Proses FFT dan hitung jarak target
                     fft_result, metrics = process_channel_data(filepath, sr)
                     if fft_result:
                         fft_queue.put(fft_result)
                         
                         distance = calculate_target_distance(metrics)
                         if distance:
-                            target_history.append((current_angle, distance))
-                            if len(target_history) > 50: # Batasi riwayat target
-                                target_history.pop(0)
+                            # Kirim event deteksi target TANPA informasi sudut
+                            ppi_queue.put({"type": "target", "distance": distance})
             
-            # 4. Kirim data PPI ke antrian
-            ppi_result = {
-                "sweep_angle": current_angle,
-                "targets": list(target_history)
-            }
-            ppi_queue.put(ppi_result)
+            # Worker ini sekarang hanya tidur sebentar untuk tidak membebani CPU
+            time.sleep(0.1)
 
         except Exception as e:
-            fft_queue.put({"status": "error", "message": f"Error in worker: {e}"})
-        
-        time.sleep(0.05)
+            print(f"Error in fft_data_worker: {e}")
 
 def sinewave_data_worker(result_queue: queue.Queue, stop_event: threading.Event):
     """Memonitor file data untuk plot sinewave."""
@@ -193,6 +198,7 @@ def sinewave_data_worker(result_queue: queue.Queue, stop_event: threading.Event)
                     result_queue.put(result_data)
 
         except Exception as e:
-            print(f"Sinewave worker error: {e}")
+            print(f"Error in sinewave_data_worker: {e}")
         
-        time.sleep(POLLING_INTERVAL)
+        # Gunakan interval refresh yang konsisten untuk menghindari NameError
+        time.sleep(WORKER_REFRESH_INTERVAL)

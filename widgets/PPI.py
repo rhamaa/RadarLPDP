@@ -48,30 +48,30 @@ def create_ppi_widget(parent, width, height):
             dpg.add_line_series([0], [0], label="Sweep", tag="ppi_sweep_line", parent=y_axis)
             
             # Titik untuk target (akan diupdate)
-            dpg.add_scatter_series([], [], label="Targets", tag="ppi_targets", parent=y_axis)
+                        # Titik untuk target (akan diupdate)
+            dpg.add_scatter_series([], [], label="Targets", tag="ppi_target_series", parent=y_axis)
 
-def update_ppi_widget(angle: float, targets: list):
-    """
-    Memperbarui garis sapuan PPI dan titik-titik target.
+def update_sweep_line(angle):
+    """Hanya memperbarui posisi garis sapuan."""
+    if dpg.does_item_exist("ppi_sweep_line"):
+        angle_rad = np.deg2rad(angle)
+        x_end = 50 * np.cos(angle_rad)
+        y_end = 50 * np.sin(angle_rad)
+        dpg.set_value("ppi_sweep_line", ([0, x_end], [0, y_end]))
 
-    Args:
-        angle (float): Sudut sapuan saat ini dalam derajat (0-180).
-        targets (list): Daftar tuple, di mana setiap tuple adalah (sudut, jarak).
-    """
-    # Perbarui garis sapuan
-    max_range = 50  # Jangkauan maksimum plot adalah 50 km
-    rad_angle = np.radians(angle)
-    sweep_x = max_range * np.cos(rad_angle)
-    sweep_y = max_range * np.sin(rad_angle)
-    dpg.set_value("ppi_sweep_line", ([0, sweep_x], [0, sweep_y]))
-
-    # Perbarui target
-    if targets:
-        target_x = [dist * np.cos(np.radians(ang)) for ang, dist in targets]
-        target_y = [dist * np.sin(np.radians(ang)) for ang, dist in targets]
-    else:
-        target_x, target_y = [], []
-    
-    # Pastikan data C-contiguous untuk Dear PyGui
-    dpg.set_value("ppi_targets", (np.ascontiguousarray(target_x, dtype=np.float64), np.ascontiguousarray(target_y, dtype=np.float64)))
-
+def add_target_to_plot(targets):
+    """Menggambar semua target yang ada dalam riwayat."""
+    if dpg.does_item_exist("ppi_target_series"):
+        if targets:
+            target_angles_rad = np.deg2rad([t[0] for t in targets])
+            target_distances = [t[1] for t in targets]
+            
+            x_coords = target_distances * np.cos(target_angles_rad)
+            y_coords = target_distances * np.sin(target_angles_rad)
+            
+            x_coords = np.ascontiguousarray(x_coords, dtype=np.float64)
+            y_coords = np.ascontiguousarray(y_coords, dtype=np.float64)
+            
+            dpg.set_value('ppi_target_series', (x_coords, y_coords))
+        else:
+            dpg.set_value('ppi_target_series', ([], []))

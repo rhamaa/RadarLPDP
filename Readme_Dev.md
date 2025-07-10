@@ -1,78 +1,42 @@
-# Dokumentasi Developer - Aplikasi Panel Analisis Radar
+# Dokumentasi Developer - Aplikasi Panel Analisis# RadarLPDP - Developer Documentation
 
-Dokumen ini memberikan rincian teknis mengenai arsitektur, struktur kode, alur data, dan komponen utama dari aplikasi panel analisis radar. Tujuannya adalah untuk membantu developer baru memahami cara kerja sistem dan bagaimana cara mengembangkannya.
-
----
-
-## 1. Ikhtisar & Arsitektur
-
-Aplikasi ini dirancang untuk memvisualisasikan data radar secara real-time. Arsitektur utamanya didasarkan pada **pemisahan antara UI dan logika pemrosesan data** menggunakan model multi-threading untuk menjaga agar antarmuka pengguna (UI) tetap responsif.
-
-- **Main Thread**: Didedikasikan sepenuhnya untuk menjalankan loop Dear PyGui (DPG), me-render UI, dan menangani interaksi pengguna. Thread ini tidak melakukan operasi I/O atau komputasi berat.
-- **Worker Thread (`fft_data_worker`)**: Satu thread pekerja utama berjalan di latar belakang untuk menangani semua tugas berat, termasuk:
-  - Membaca file data biner dari disk (`live/live_acquisition_ui.bin`).
-  - Melakukan Transformasi Fourier Cepat (FFT) pada kedua channel.
-  - Mengekstrak metrik puncak (frekuensi & magnitudo).
-  - Menghitung jarak target berdasarkan metrik.
-  - Mengelola logika sapuan radar 180 derajat (bolak-balik).
-  - Menyiapkan data untuk dikirim ke UI.
-- **Komunikasi Antar-Thread**: Menggunakan `queue.Queue` dari Python sebagai mekanisme komunikasi yang aman (thread-safe) untuk mengirim data dari worker thread ke main thread. Ada dua antrian utama: `fft_queue` dan `ppi_queue`.
+Dokumen ini memberikan gambaran teknis tentang arsitektur, alur data, dan komponen utama dari aplikasi RadarLPDP. Tujuannya adalah untuk membantu developer memahami cara kerja sistem dan bagaimana cara memodifikasinya.
 
 ---
 
-## 2. Dependensi
+## Arsitektur Umum: Dekopling Sudut dan Data
 
-Aplikasi ini memerlukan beberapa pustaka pihak ketiga. Anda dapat menginstalnya menggunakan pip dari virtual environment:
+Aplikasi ini menggunakan `dearpygui` untuk antarmuka pengguna (UI) dan `threading` untuk pemrosesan data secara konkuren. Arsitektur terbaru ini dirancang dengan prinsip **dekopling (pemisahan)** antara **sumber data sudut sapuan** dan **sumber data deteksi target**. Ini memungkinkan fleksibilitas maksimum, terutama untuk integrasi dengan hardware eksternal (seperti Arduino) di masa depan.
 
-```bash
-source .venv/bin/activate
-pip install dearpygui numpy scipy
-```
+Komponen utama meliputi:
 
-- **dearpygui**: Framework utama untuk membangun antarmuka pengguna (GUI).
-- **numpy**: Digunakan untuk operasi numerik yang efisien pada array, terutama dalam pemrosesan sinyal.
-- **scipy**: Digunakan untuk komputasi FFT (`scipy.fft`).
+1.  **UI Widgets** (`widgets/`): Modul yang mendefinisikan elemen UI (plot PPI, plot sinewave, dll.).
+2.  **Data Processing Workers** (`functions/data_processing.py`): Kumpulan thread independen yang masing-masing memiliki satu tanggung jawab spesifik.
+3.  **UI Callbacks** (`app/callbacks.py`): Fungsi yang menjadi jembatan antara data dari worker dan pembaruan visual di UI.
+4.  **Konfigurasi** (`config.py`): File terpusat untuk semua parameter penting.
 
 ---
 
-## 3. Struktur Proyek
+## Alur Data Terpisah
 
-```
-/RadarLPDP
-├── app/
-│   ├── callbacks.py      # Logika untuk update UI dari antrian & event handling
-│   └── setup.py          # Inisialisasi DPG, tema, dan worker thread
-├── functions/
-│   └── data_processing.py  # Logika inti: worker, FFT, kalkulasi target
-├── live/
-│   └── live_acquisition_ui.bin # File data biner real-time
-├── widgets/
-│   ├── PPI.py            # Widget Plan Position Indicator (180°)
-│   ├── FFT.py            # Widget spektrum FFT
-│   ├── Sinewave.py       # Widget plot sinyal mentah
-│   ├── controller.py     # Widget kontrol aplikasi
-│   └── metrics.py        # Widget tabel metrik frekuensi
-├── config.py             # File konfigurasi terpusat
-├── dumy_gen.py           # Skrip untuk menghasilkan data biner dummy
-├── main.py               # Titik masuk utama aplikasi (mendefinisikan layout)
-└── Readme_Dev.md         # Dokumentasi ini
-```
+Alur data dirancang agar *thread-safe* menggunakan `queue.Queue` dan sekarang sepenuhnya terpisah.
 
----
+1.  **`dumy_gen.py`**: Skrip ini mensimulasikan **data deteksi** dengan menulis sinyal ke `live/live_acquisition_ui.bin`.
 
-## 4. Alur Data (Data Flow)
+2.  **Worker Threads**:
+    - **`angle_worker`**: **Sumber kebenaran untuk sudut sapuan**. Worker ini secara independen menghasilkan sudut sapuan (0°-180° bolak-balik) dengan kecepatan konstan. Di masa depan, worker inilah yang akan dimodifikasi untuk membaca data dari port serial Arduino. Ia mengirimkan pesan `{'type': 'sweep', 'angle': ...}` ke `ppi_queue`.
+    - **`fft_data_worker`**: **Sumber kebenaran untuk deteksi target**. Worker ini hanya memantau `live_acquisition_ui.bin`. Jika ada file baru, ia melakukan FFT, menghitung jarak target, dan mengirimkan pesan `{'type': 'target', 'distance': ...}` ke `ppi_queue`. Worker ini **tidak tahu menahu tentang sudut sapuan**.
+    - **`sinewave_data_worker`**: Memproses file yang sama untuk menampilkan plot sinewave mentah.
 
-1.  **Generasi Data**: `dumy_gen.py` secara periodik menulis ulang `live/live_acquisition_ui.bin` dengan data sinyal baru.
-2.  **Deteksi & Proses**: `fft_data_worker` di `functions/data_processing.py` memonitor perubahan file. Jika ada perubahan, ia memanggil fungsi pembantu untuk:
-    a. Membaca file dan melakukan FFT (`process_channel_data`).
-    b. Menghitung jarak target dari hasil FFT (`calculate_target_distance`).
-3.  **Update Sudut Sapuan**: Secara bersamaan, worker memperbarui sudut sapuan radar, membuatnya bergerak bolak-balik antara 0 dan 180 derajat (`update_sweep_angle`).
-4.  **Pengiriman Data**: Worker menempatkan dua paket data ke dalam antrian yang berbeda:
-    - **`fft_queue`**: Berisi data spektrum lengkap (frekuensi, magnitudo) untuk widget FFT dan Metrik.
-    - **`ppi_queue`**: Berisi sudut sapuan saat ini dan daftar riwayat target (sudut, jarak) untuk widget PPI.
-5.  **Penerimaan & Update UI**: Di main thread, `app/callbacks.py:update_ui_from_queues` secara terus-menerus memeriksa kedua antrian. Jika ada data baru, ia mengambilnya dan memanggil fungsi yang relevan untuk memperbarui elemen UI, seperti `widgets.PPI:update_ppi_widget`.
+3.  **Antrian (Queues)**:
+    - `ppi_queue`: Antrian kunci yang menerima **dua jenis pesan** dari dua worker yang berbeda: pesan `sweep` dari `angle_worker` dan pesan `target` dari `fft_data_worker`.
+    - `fft_queue` & `sinewave_queue`: Berfungsi seperti sebelumnya untuk metrik dan plot sinewave.
 
----
+4.  **`update_ui_from_queues` (di `app/callbacks.py`)**:
+    - Fungsi ini berjalan di setiap frame dan bertindak sebagai **koordinator cerdas**.
+    - Ia menyimpan `last_known_angle` terakhir yang diterima dari pesan `sweep`.
+    - Ketika pesan `target` diterima, ia akan mem-plot target tersebut pada `last_known_angle` yang tersimpan.
+    - Ini memastikan UI selalu responsif dan pergerakan sapuan tetap mulus, terlepas dari apakah ada target baru atau tidak.
 
 ## 5. Rincian Modul Penting
 

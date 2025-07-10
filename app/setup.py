@@ -6,7 +6,7 @@ import queue
 
 # Impor dari file lokal
 from config import APP_SPACING, APP_PADDING, THEME_COLORS
-from functions.data_processing import fft_data_worker, sinewave_data_worker
+from functions.data_processing import fft_data_worker, sinewave_data_worker, angle_worker
 from app.callbacks import resize_callback
 
 def initialize_queues_and_events():
@@ -24,10 +24,12 @@ def start_worker_threads(queues, stop_event):
     # fft_data_worker sekarang juga menangani data PPI
     fft_thread = threading.Thread(target=fft_data_worker, args=(queues['fft'], queues['ppi'], stop_event), daemon=True)
     sinewave_thread = threading.Thread(target=sinewave_data_worker, args=(queues['sinewave'], stop_event), daemon=True)
+    angle_thread = threading.Thread(target=angle_worker, args=(queues['ppi'], stop_event), daemon=True)
 
     threads = {
         'fft': fft_thread,
         'sinewave': sinewave_thread,
+        'angle': angle_thread
     }
 
     for thread in threads.values():

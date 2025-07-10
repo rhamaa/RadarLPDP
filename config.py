@@ -16,7 +16,8 @@ FILENAME = os.path.join(PROJECT_ROOT, FILENAME_BASE)
 SAMPLE_RATE = 20_000_000  # 20 MHz
 
 # Seberapa sering (dalam detik) memeriksa pembaruan file
-POLLING_INTERVAL = 0.2  # 5 kali per detik
+POLLING_INTERVAL = 0.5  # Detik (sudah tidak digunakan oleh fft_worker)
+WORKER_REFRESH_INTERVAL = 0.05 # Detik, untuk refresh UI ~20 FPSali per detik
 
 # --- Konfigurasi Tampilan ---
 APP_SPACING = 8

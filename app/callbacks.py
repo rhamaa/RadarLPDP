@@ -7,16 +7,34 @@ import numpy as np
 
 # Impor dari file lokal
 from config import APP_SPACING, APP_PADDING, THEME_COLORS
-from widgets.PPI import update_ppi_widget
+from widgets.PPI import update_sweep_line, add_target_to_plot
+
+# Variabel global untuk state UI
+last_known_angle = 0
+target_history = []
 
 def update_ui_from_queues(queues):
     """Memeriksa semua queue dan mengupdate UI jika ada data baru."""
+    global last_known_angle, target_history
 
-    # --- Update PPI --- #
+    # --- Antrian PPI (sekarang menangani dua jenis pesan) ---
     try:
         ppi_data = queues['ppi'].get_nowait()
-        if ppi_data:
-            update_ppi_widget(angle=ppi_data["sweep_angle"], targets=ppi_data["targets"])
+        
+        if ppi_data['type'] == 'sweep':
+            # Pesan dari angle_worker: hanya perbarui sudut dan garis sapuan
+            last_known_angle = ppi_data['angle']
+            update_sweep_line(last_known_angle)
+
+        elif ppi_data['type'] == 'target':
+            # Pesan dari fft_data_worker: tambahkan target baru pada sudut terakhir yang diketahui
+            distance = ppi_data['distance']
+            new_target = (last_known_angle, distance)
+            target_history.append(new_target)
+            if len(target_history) > 50: # Batasi riwayat
+                target_history.pop(0)
+            
+            add_target_to_plot(target_history)
     except queue.Empty:
         pass
 
