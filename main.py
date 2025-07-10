@@ -22,21 +22,21 @@ def create_main_layout():
         with dpg.group(horizontal=True):
             # Kolom kiri
             with dpg.group(tag="left_column"):
-                with dpg.child_window(label="PPI Desktop", tag="ppi_window", no_scrollbar=True, width=-1, height=-1):
-                    create_ppi_widget()
-                with dpg.child_window(label="FFT Desktop", tag="fft_window", no_scrollbar=True, width=-1, height=-1):
-                    create_fft_widget()
+                with dpg.child_window(label="PPI Desktop", tag="ppi_window", no_scrollbar=True) as ppi_win:
+                    create_ppi_widget(parent=ppi_win, width=-1, height=-1)
+                with dpg.child_window(label="FFT Desktop", tag="fft_window", no_scrollbar=True) as fft_win:
+                    create_fft_widget(parent=fft_win, width=-1, height=-1)
             
             # Kolom kanan
             with dpg.group(tag="right_column"):
-                with dpg.child_window(label="Sinewave", tag="sinewave_window", no_scrollbar=True, width=-1, height=-1):
-                    create_sinewave_widget()
-                with dpg.child_window(label="Frequency Metrics", tag="metrics_window", no_scrollbar=True, width=-1, height=-1):
-                    create_metrics_widget()
-                with dpg.child_window(label="File Explorer", tag="file_explorer_window", no_scrollbar=True, width=-1, height=-1):
-                    create_file_explorer_widget()
-                with dpg.child_window(label="Controller", tag="controller_window", no_scrollbar=True, width=-1, height=-1):
-                    create_controller_widget()
+                with dpg.child_window(label="Sinewave", tag="sinewave_window", no_scrollbar=True) as sinewave_win:
+                    create_sinewave_widget(parent=sinewave_win, width=-1, height=-1)
+                with dpg.child_window(label="Frequency Metrics", tag="metrics_window", no_scrollbar=True) as metrics_win:
+                    create_metrics_widget(parent=metrics_win, width=-1, height=-1)
+                with dpg.child_window(label="File Explorer", tag="file_explorer_window", no_scrollbar=True) as file_explorer_win:
+                    create_file_explorer_widget(parent=file_explorer_win, width=-1, height=-1)
+                with dpg.child_window(label="Controller", tag="controller_window", no_scrollbar=True) as controller_win:
+                    create_controller_widget(parent=controller_win, width=-1, height=-1)
 
 # --- Titik Masuk Aplikasi --- #
 if __name__ == "__main__":

@@ -8,13 +8,13 @@ from config import FILENAME
 
 # --- Fungsi Pembuat Widget UI --- #
 
-def create_fft_widget():
+def create_fft_widget(parent, width, height):
     """Membuat widget UI untuk menampilkan FFT Spectrum."""
-    with dpg.group():
+    with dpg.group(parent=parent):
         # Menggunakan os.path.basename untuk menampilkan nama file saja, bukan path lengkap
         dpg.add_text(f"Monitoring '{os.path.basename(FILENAME)}'...", tag="fft_status_text")
         
-        with dpg.plot(label="Live FFT Spectrum", height=-1, width=-1, tag="fft_plot"):
+        with dpg.plot(label="Live FFT Spectrum", height=height, width=width, tag="fft_plot"):
             dpg.add_plot_legend()
             dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (KHz)", tag="fft_xaxis", log_scale=True)
             dpg.set_axis_limits("fft_xaxis", 10, 10000) # Batas dalam KHz (10 KHz hingga 10 MHz)

@@ -6,7 +6,7 @@ import queue
 
 # Impor dari file lokal
 from config import APP_SPACING, APP_PADDING, THEME_COLORS
-from functions.data_processing import ppi_data_worker, fft_data_worker, sinewave_data_worker
+from functions.data_processing import fft_data_worker, sinewave_data_worker
 from app.callbacks import resize_callback
 
 def initialize_queues_and_events():
@@ -20,14 +20,18 @@ def initialize_queues_and_events():
     return queues, stop_event
 
 def start_worker_threads(queues, stop_event):
-    """Membuat dan memulai semua thread worker."""
-    threads = [
-        threading.Thread(target=ppi_data_worker, args=(queues['ppi'], stop_event), daemon=True),
-        threading.Thread(target=fft_data_worker, args=(queues['fft'], stop_event), daemon=True),
-        threading.Thread(target=sinewave_data_worker, args=(queues['sinewave'], stop_event), daemon=True)
-    ]
-    for t in threads:
-        t.start()
+    # Membuat dan memulai thread untuk setiap worker
+    # fft_data_worker sekarang juga menangani data PPI
+    fft_thread = threading.Thread(target=fft_data_worker, args=(queues['fft'], queues['ppi'], stop_event), daemon=True)
+    sinewave_thread = threading.Thread(target=sinewave_data_worker, args=(queues['sinewave'], stop_event), daemon=True)
+
+    threads = {
+        'fft': fft_thread,
+        'sinewave': sinewave_thread,
+    }
+
+    for thread in threads.values():
+        thread.start()
     return threads
 
 def setup_dpg(title='Real-time Radar UI & Spectrum Analyzer', width=1280, height=720):

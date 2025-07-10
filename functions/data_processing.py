@@ -67,134 +67,129 @@ def find_peak_metrics(frequencies, magnitudes):
     peak_mag = magnitudes[peak_index]
     return peak_freq, peak_mag
 
+# --- Helper Functions for Workers ---
+
+def process_channel_data(filepath, sr):
+    """Memuat data dari file, memproses FFT, dan mengembalikan hasilnya."""
+    ch1_data, ch2_data, n_samples, _ = load_and_process_data(filepath, sr)
+    if ch1_data is None or n_samples <= 0:
+        return None, None
+
+    freqs_ch1, mag_ch1 = compute_fft(ch1_data, sr)
+    freqs_ch2, mag_ch2 = compute_fft(ch2_data, sr)
+    peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
+    peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
+
+    fft_result = {
+        "status": "done",
+        "freqs_ch1": freqs_ch1, "mag_ch1": mag_ch1,
+        "freqs_ch2": freqs_ch2, "mag_ch2": mag_ch2,
+        "n_samples": n_samples, "sample_rate": sr,
+        "metrics": {
+            "ch1": {"peak_freq": peak_freq_ch1, "peak_mag": peak_mag_ch1},
+            "ch2": {"peak_freq": peak_freq_ch2, "peak_mag": peak_mag_ch2}
+        }
+    }
+    return fft_result, fft_result["metrics"]
+
+def calculate_target_distance(metrics):
+    """Menghitung jarak target berdasarkan metrik puncak."""
+    if not metrics:
+        return None
+    
+    peak_freq = metrics["ch1"]["peak_freq"]
+    peak_mag = metrics["ch1"]["peak_mag"]
+    
+    distance = (peak_freq * peak_mag) / 1000
+    if distance > 1:
+        return min(distance, 50) # Kembalikan jarak yang sudah di-clamp
+    return None
+
+def update_sweep_angle(current_angle, direction, increment):
+    """Memperbarui sudut sapuan untuk gerakan bolak-balik 180 derajat."""
+    new_angle = current_angle + increment * direction
+    if not (0 <= new_angle <= 180):
+        direction *= -1
+        new_angle = np.clip(new_angle, 0, 180)
+    return new_angle, direction
+
 # --- Worker Thread Functions --- #
 
-def fft_data_worker(result_queue: queue.Queue, stop_event: threading.Event):
-    """
-    Worker yang memantau file dan memproses FFT jika ada perubahan.
-    Menggunakan konfigurasi dari config.py.
-    """
-    print(f"FFT worker started. Monitoring '{FILENAME}' for changes...")
+def fft_data_worker(fft_queue: queue.Queue, ppi_queue: queue.Queue, stop_event: threading.Event):
+    """Memonitor file, menghitung FFT & metrik, menghitung jarak target, dan mengirim data ke antrian FFT & PPI."""
     last_modified_time = 0
+    filepath = FILENAME
+    sr = SAMPLE_RATE
+    
+    current_angle = 0
+    angle_increment = 2
+    sweep_direction = 1
+    target_history = []
 
     while not stop_event.is_set():
         try:
-            if not os.path.exists(FILENAME):
-                result_queue.put({"status": "waiting", "message": f"Menunggu file '{os.path.basename(FILENAME)}'..."})
-                time.sleep(1)
-                continue
+            # 1. Perbarui sudut sapuan
+            current_angle, sweep_direction = update_sweep_angle(current_angle, sweep_direction, angle_increment)
 
-            current_mtime = os.path.getmtime(FILENAME)
-
-            if current_mtime != last_modified_time:
-                print(f"File '{os.path.basename(FILENAME)}' changed. Processing FFT...")
-                last_modified_time = current_mtime
-                result_queue.put({"status": "processing"})
-                
-                ch1_data, ch2_data, n_samples, sr = load_and_process_data(FILENAME, SAMPLE_RATE)
-
-                if ch1_data is None or n_samples == 0:
-                    result_queue.put({"status": "error", "message": f"Gagal memproses file."})
-                    continue
-
-                freqs_ch1, mag_ch1 = compute_fft(ch1_data, sr)
-                freqs_ch2, mag_ch2 = compute_fft(ch2_data, sr)
-
-                # Ekstrak metrik puncak
-                peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
-                peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
-                
-                result_data = {
-                    "status": "done",
-                    "freqs_ch1": freqs_ch1, "mag_ch1": mag_ch1,
-                    "freqs_ch2": freqs_ch2, "mag_ch2": mag_ch2,
-                    "n_samples": n_samples, "sample_rate": sr,
-                    "metrics": {
-                        "ch1": {"peak_freq": peak_freq_ch1, "peak_mag": peak_mag_ch1},
-                        "ch2": {"peak_freq": peak_freq_ch2, "peak_mag": peak_mag_ch2}
-                    }
-                }
-                result_queue.put(result_data)
+            # 2. Periksa pembaruan file dan proses data jika ada
+            if os.path.exists(filepath):
+                modified_time = os.path.getmtime(filepath)
+                if modified_time != last_modified_time:
+                    last_modified_time = modified_time
+                    fft_queue.put({"status": "processing"})
+                    
+                    # 3. Proses FFT dan hitung jarak target
+                    fft_result, metrics = process_channel_data(filepath, sr)
+                    if fft_result:
+                        fft_queue.put(fft_result)
+                        
+                        distance = calculate_target_distance(metrics)
+                        if distance:
+                            target_history.append((current_angle, distance))
+                            if len(target_history) > 50: # Batasi riwayat target
+                                target_history.pop(0)
             
-            time.sleep(POLLING_INTERVAL)
+            # 4. Kirim data PPI ke antrian
+            ppi_result = {
+                "sweep_angle": current_angle,
+                "targets": list(target_history)
+            }
+            ppi_queue.put(ppi_result)
 
         except Exception as e:
-            print(f"Error in FFT worker loop: {e}")
-            result_queue.put({"status": "error", "message": f"Error: {e}"})
-            time.sleep(1)
-    
-    print("FFT worker thread stopped.")
+            fft_queue.put({"status": "error", "message": f"Error in worker: {e}"})
+        
+        time.sleep(0.05)
 
 def sinewave_data_worker(result_queue: queue.Queue, stop_event: threading.Event):
-    """
-    Worker yang memantau file dan mengirimkan data waveform mentah.
-    Menggunakan konfigurasi dari config.py.
-    """
-    print(f"Sinewave worker started. Monitoring '{FILENAME}' for changes...")
+    """Memonitor file data untuk plot sinewave."""
     last_modified_time = 0
+    filepath = FILENAME
+    sr = SAMPLE_RATE
 
     while not stop_event.is_set():
         try:
-            if not os.path.exists(FILENAME):
-                time.sleep(1)
-                continue
-
-            current_mtime = os.path.getmtime(FILENAME)
-            if current_mtime != last_modified_time:
-                print(f"File '{os.path.basename(FILENAME)}' changed. Processing for Sinewave...")
-                last_modified_time = current_mtime
-                
-                ch1_data, ch2_data, n_samples, sr = load_and_process_data(FILENAME, SAMPLE_RATE)
-
-                if ch1_data is None or n_samples == 0:
-                    continue
-                
-                # Konversi sumbu waktu ke mikrodetik (µs)
-                time_axis_us = np.linspace(0, n_samples / sr, n_samples, endpoint=False) * 1e6
-                
-                result_data = {
-                    "status": "done",
-                    "time_axis": time_axis_us,
-                    "ch1_data": ch1_data,
-                    "ch2_data": ch2_data
-                }
-                result_queue.put(result_data)
-            
-            time.sleep(POLLING_INTERVAL)
+            if os.path.exists(filepath):
+                modified_time = os.path.getmtime(filepath)
+                if modified_time != last_modified_time:
+                    last_modified_time = modified_time
+                    
+                    ch1_data, ch2_data, n_samples, _ = load_and_process_data(filepath, sr)
+                    if ch1_data is None or n_samples == 0:
+                        continue
+                    
+                    # Konversi sumbu waktu ke mikrodetik (µs)
+                    time_axis_us = np.linspace(0, n_samples / sr, n_samples, endpoint=False) * 1e6
+                    
+                    result_data = {
+                        "status": "done",
+                        "time_axis": time_axis_us,
+                        "ch1_data": ch1_data,
+                        "ch2_data": ch2_data
+                    }
+                    result_queue.put(result_data)
 
         except Exception as e:
-            print(f"Error in Sinewave worker loop: {e}")
-            time.sleep(1)
-    
-    print("Sinewave worker thread stopped.")
-
-def ppi_data_worker(data_queue: queue.Queue, stop_event: threading.Event):
-    """
-    Worker yang menghasilkan data untuk sapuan jarum dan target di PPI.
-    """
-    print("PPI worker thread started.")
-    # Konfigurasi PPI (bisa juga dipindah ke config.py jika perlu)
-    SWEEP_HISTORY_LENGTH = 20 
-    TARGETS = [(140, 70), (75, 50)]
-
-    current_angle, direction, last_time = 0, 1, time.time()
-    sweep_history = collections.deque(maxlen=SWEEP_HISTORY_LENGTH)
-    
-    while not stop_event.is_set():
-        current_time = time.time()
-        delta_time, last_time = current_time - last_time, current_time
-        current_angle += 90 * direction * delta_time
-
-        if current_angle > 180:
-            current_angle = 180
-            direction = -1
-        elif current_angle < 0:
-            current_angle = 0
-            direction = 1
-            
-        sweep_history.append(current_angle)
-        data_to_send = {"angles": list(sweep_history), "targets": TARGETS}
-        data_queue.put(data_to_send)
-        time.sleep(0.016) # ~60 FPS update rate
+            print(f"Sinewave worker error: {e}")
         
-    print("PPI worker thread stopped.")
+        time.sleep(POLLING_INTERVAL)

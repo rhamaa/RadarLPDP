@@ -19,9 +19,9 @@ def refresh_log_files():
     except Exception as e:
         dpg.configure_item("log_file_list", items=[f"Error: {e}"])
 
-def create_file_explorer_widget():
+def create_file_explorer_widget(parent, width, height):
     """Membuat widget untuk menampilkan file log dari direktori 'log'."""
-    with dpg.group(tag="file_explorer_group"):
+    with dpg.group(parent=parent):
         dpg.add_text("Log File Explorer")
         with dpg.group(horizontal=True):
             dpg.add_button(label="Refresh", callback=refresh_log_files)

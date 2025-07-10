@@ -2,9 +2,9 @@
 
 import dearpygui.dearpygui as dpg
 
-def create_metrics_widget():
+def create_metrics_widget(parent, width, height):
     """Membuat widget untuk menampilkan metrik frekuensi."""
-    with dpg.group(tag="metrics_group"):
+    with dpg.group(parent=parent):
         dpg.add_text("Frequency Metrics")
         with dpg.table(header_row=True, borders_innerH=True, borders_outerH=True, borders_innerV=True, borders_outerV=True):
             dpg.add_table_column(label="Channel")

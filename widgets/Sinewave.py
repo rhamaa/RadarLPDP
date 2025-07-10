@@ -4,12 +4,12 @@ import dearpygui.dearpygui as dpg
 
 # --- Fungsi Pembuat Widget UI --- #
 
-def create_sinewave_widget():
+def create_sinewave_widget(parent, width, height):
     """Membuat widget UI untuk menampilkan waveform mentah."""
-    with dpg.group():
+    with dpg.group(parent=parent):
         dpg.add_text("Live Waveform Display", tag="sinewave_status_text")
         
-        with dpg.plot(label="Time-Domain Waveform", height=-1, width=-1, tag="sinewave_plot"):
+        with dpg.plot(label="Time-Domain Waveform", height=height, width=width, tag="sinewave_plot"):
             dpg.add_plot_legend()
             dpg.add_plot_axis(dpg.mvXAxis, label="Time (µs)", tag="sinewave_xaxis")
             dpg.add_plot_axis(dpg.mvYAxis, label="Amplitude (ADC Counts)", tag="sinewave_yaxis")

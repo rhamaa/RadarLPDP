@@ -21,39 +21,57 @@ def generate_arc_points(center, radius, start_deg, end_deg, segments=100):
 
 # --- Fungsi Pembuat Widget UI --- #
 
-def create_ppi_widget():
-    """
-    Membuat widget PPI. Fungsi ini sekarang hanya fokus pada penggambaran elemen statis
-    dan mengimpor konfigurasi warna langsung dari config.py.
-    """
-    # Konfigurasi tampilan PPI (bisa dipindah ke config.py jika lebih kompleks)
-    MAX_RADIUS = 100
-    RANGE_RINGS = 4
-    AZIMUTH_LABELS = [0, 30, 60, 90, 120, 150, 180]
-
-    with dpg.plot(tag="ppi_plot", no_title=True, no_mouse_pos=True, height=-1, width=-1, equal_aspects=True):
-        dpg.add_plot_axis(dpg.mvXAxis, no_gridlines=True, no_tick_marks=True, no_tick_labels=True, tag="ppi_xaxis")
-        dpg.set_axis_limits("ppi_xaxis", -MAX_RADIUS - 10, MAX_RADIUS + 10)
+def create_ppi_widget(parent, width, height):
+    """Membuat widget PPI dengan skala, lingkaran jarak, dan series untuk data."""
+    with dpg.child_window(parent=parent, width=width, height=height, no_scrollbar=True):
+        dpg.add_text("Plan Position Indicator (PPI) - Jarak (km)")
         
-        dpg.add_plot_axis(dpg.mvYAxis, no_gridlines=True, no_tick_marks=True, no_tick_labels=True, tag="ppi_yaxis")
-        dpg.set_axis_limits("ppi_yaxis", -10, MAX_RADIUS + 10)
-
-        center = (0, 0)
+        axis_limit = 50
         
-        # Gambar latar belakang area scan
-        background_points = generate_arc_points(center, MAX_RADIUS, 0, 180)
-        dpg.draw_polygon(points=[center] + background_points, color=(0,0,0,0), fill=THEME_COLORS["scan_area"])
+        with dpg.plot(label="PPI Display", width=-1, height=-1, equal_aspects=True):
+            dpg.add_plot_legend()
+            
+            x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="", no_tick_labels=True, lock_min=True, lock_max=True)
+            dpg.set_axis_limits(x_axis, -axis_limit, axis_limit)
+            
+            y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="", no_tick_labels=True, lock_min=True, lock_max=True)
+            dpg.set_axis_limits(y_axis, 0, axis_limit) # Batas Y dari 0 hingga 50
 
-        # Gambar cincin jarak (range rings)
-        ring_radii = np.linspace(0, MAX_RADIUS, RANGE_RINGS + 1)[1:]
-        for r in ring_radii:
-            ring_points = generate_arc_points(center, r, 0, 180)
-            dpg.draw_polyline(ring_points, color=THEME_COLORS["grid_lines"], thickness=1)
+            # Menggambar busur jarak 180 derajat (range rings)
+            for r in range(10, axis_limit + 1, 10):
+                theta = np.linspace(0, np.pi, 100) # 0 hingga pi untuk 180 derajat
+                x = r * np.cos(theta)
+                y = r * np.sin(theta)
+                dpg.add_line_series(list(x), list(y), parent=y_axis, label=f"{r} km")
 
-        # Gambar label sudut (azimuth)
-        for angle in AZIMUTH_LABELS:
-            pos = polar_to_cartesian(center[0], center[1], angle, MAX_RADIUS + 5)
-            dpg.draw_text(pos, f"{angle}", color=THEME_COLORS["text"], size=10)
+            # Garis untuk sapuan radar (akan diupdate)
+            dpg.add_line_series([0], [0], label="Sweep", tag="ppi_sweep_line", parent=y_axis)
+            
+            # Titik untuk target (akan diupdate)
+            dpg.add_scatter_series([], [], label="Targets", tag="ppi_targets", parent=y_axis)
 
-        # Siapkan layer untuk gambar dinamis (sapuan jarum dan target)
-        dpg.add_draw_layer(tag="ppi_dynamic_layer")
+def update_ppi_widget(angle: float, targets: list):
+    """
+    Memperbarui garis sapuan PPI dan titik-titik target.
+
+    Args:
+        angle (float): Sudut sapuan saat ini dalam derajat (0-180).
+        targets (list): Daftar tuple, di mana setiap tuple adalah (sudut, jarak).
+    """
+    # Perbarui garis sapuan
+    max_range = 50  # Jangkauan maksimum plot adalah 50 km
+    rad_angle = np.radians(angle)
+    sweep_x = max_range * np.cos(rad_angle)
+    sweep_y = max_range * np.sin(rad_angle)
+    dpg.set_value("ppi_sweep_line", ([0, sweep_x], [0, sweep_y]))
+
+    # Perbarui target
+    if targets:
+        target_x = [dist * np.cos(np.radians(ang)) for ang, dist in targets]
+        target_y = [dist * np.sin(np.radians(ang)) for ang, dist in targets]
+    else:
+        target_x, target_y = [], []
+    
+    # Pastikan data C-contiguous untuk Dear PyGui
+    dpg.set_value("ppi_targets", (np.ascontiguousarray(target_x, dtype=np.float64), np.ascontiguousarray(target_y, dtype=np.float64)))
+

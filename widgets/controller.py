@@ -1,9 +1,9 @@
 # UI/widgets/controller.py
 import dearpygui.dearpygui as dpg
 
-def create_controller_widget():
+def create_controller_widget(parent, width, height):
     """Membuat widget untuk Controller."""
-    with dpg.group():
+    with dpg.group(parent=parent):
         dpg.add_text("System Controls")
         dpg.add_button(label="Start", width=-1)
         dpg.add_button(label="Stop", width=-1)
