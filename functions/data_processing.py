@@ -135,7 +135,8 @@ def angle_worker(ppi_queue: queue.Queue, stop_event: threading.Event):
                                 continue
 
                             angle_str = line.decode('utf-8')
-                            angle = int(float(angle_str)) # Konversi ke float dulu untuk menangani angka seperti "180.0"
+                            # Konversi langsung ke float untuk mendukung nilai desimal (mis. 45.7)
+                            angle = float(angle_str)
                             
                             # Validasi rentang sudut
                             if 0 <= angle <= 180:
