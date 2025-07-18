@@ -1,142 +1,149 @@
-/*
- *  FreeRTOS – Derajat 0-180 berganti arah di limit-switch,
- *              kecepatan diatur rotary-switch.
- *  Board  : Arduino Mega 2560
- *  Library: Arduino_FreeRTOS_Library
- */
-#include <Arduino_FreeRTOS.h>
+// Motor control with rotary switch, limit switches, and encoder feedback
+// -------------------------------------------------------------------
+// Include Encoder library (built‑in to most Arduino installs via Library Manager)
+#include <Encoder.h>
 
-/* ====== Pin map ====== */
-const uint8_t PIN_LIMIT_RIGHT = 9;      // NO right
-const uint8_t PIN_LIMIT_LEFT  = 10;     // NO left
-const uint8_t ROTARY_PINS[]   = {12, 13, 14, 15, 16, 17};
-const uint8_t ROTARY_COUNT    = sizeof(ROTARY_PINS);
+// ------------------- Pin Assignments --------------------
+#define RPWM 5         // PWM pin for forward
+#define LPWM 6         // PWM pin for reverse
+#define R_EN 7         // Enable forward
+#define L_EN 8         // Enable reverse
+#define LIMIT_RIGHT 9  // Right limit switch (active‑low)
+#define LIMIT_LEFT 10  // Left  limit switch (active‑low)
 
-/* ====== GLOBAL VAR ====== */
-volatile int16_t  g_degree    = 0;      // 0-180°
-volatile int8_t   g_direction = +1;     // +1 fwd, -1 rev
-volatile uint16_t g_delayMs   = 1000;   // step interval (0 => stop)
+// Encoder pins (interrupt capable on Uno/Nano: 2 & 3)
+#define ENC_PIN_A 2
+#define ENC_PIN_B 3
 
-/* ====== Task proto ====== */
-void TaskMotion (void *pv);
-void TaskRotary (void *pv);
-void TaskLimit  (void *pv);
+// Rotary switch pins (active‑low)
+const int switchPins[6] = {12, 13, 14, 15, 16, 17};
 
-/* ====== Helper: protected write ====== */
-void setDelayMs(uint16_t d) {
-  taskENTER_CRITICAL();
-  g_delayMs = d;
-  taskEXIT_CRITICAL();
+// -------------------- Encoder setup ---------------------
+Encoder motorEncoder(ENC_PIN_A, ENC_PIN_B);
+const float COUNTS_PER_REV = 1024.0;        // ⚠️ Edit sesuai encoder kamu
+const float WHEEL_DIAMETER_M = 0.10;        // 10 cm roda (opsional)
+const float WHEEL_CIRC       = WHEEL_DIAMETER_M * PI;
+
+// -------------------- Globals ---------------------------
+int  lastRotaryPos = -1;        // Last rotary switch pos (1‑6)
+int  motorSpeed    = 0;         // PWM duty (0‑255)
+bool direction     = true;      // true = forward, false = reverse
+
+long lastCount     = 0;         // For RPM calculation
+unsigned long lastPrint = 0;    // Last time we printed encoder info
+const unsigned long PRINT_INTERVAL = 200; // ms
+
+// ------------------- Encoder helpers --------------------
+long getEncoderCounts() {
+  return motorEncoder.read();
 }
-void setDirection(int8_t dir) {
-  taskENTER_CRITICAL();
-  g_direction = dir;
-  taskEXIT_CRITICAL();
+
+void resetEncoderCounts() {
+  motorEncoder.write(0);
 }
 
-/* ====== SETUP ====== */
+bool getEncoderDirection(long deltaCounts) {
+  return (deltaCounts >= 0);   // true = CW/forward
+}
+
+float countsToAngle(long counts) {
+  return (counts % (long)COUNTS_PER_REV) * 360.0 / COUNTS_PER_REV;
+}
+
+float countsToDistance(long counts) {
+  return (counts / COUNTS_PER_REV) * WHEEL_CIRC; // meters
+}
+
+float computeRPM(long deltaCounts, unsigned long deltaMillis) {
+  if (deltaMillis == 0) return 0.0;
+  return (deltaCounts * 60000.0) / (COUNTS_PER_REV * deltaMillis);
+}
+
+void printEncoderInfo() {
+  unsigned long now = millis();
+  if (now - lastPrint < PRINT_INTERVAL) return; // print setiap 200 ms
+
+  long counts      = getEncoderCounts();
+  long deltaCounts = counts - lastCount;
+  unsigned long deltaMillis = now - lastPrint;
+  float rpm        = computeRPM(deltaCounts, deltaMillis);
+  bool dirCW       = getEncoderDirection(deltaCounts);
+  float angleDeg   = countsToAngle(counts);
+  float distanceM  = countsToDistance(counts);
+  float speedMS    = (rpm * WHEEL_CIRC) / 60.0; // m/s
+
+  Serial.print("Counts: ");   Serial.print(counts);
+  Serial.print(" | Dir: ");   Serial.print(dirCW ? "CW" : "CCW");
+  Serial.print(" | Angle: "); Serial.print(angleDeg, 1); Serial.print(" deg");
+  Serial.print(" | RPM: ");   Serial.print(rpm, 1);
+  Serial.print(" | Speed: "); Serial.print(speedMS, 3); Serial.print(" m/s");
+  Serial.print(" | Dist: ");  Serial.print(distanceM, 3); Serial.println(" m");
+
+  lastCount = counts;
+  lastPrint = now;
+}
+
+// -------------------- Arduino setup ---------------------
 void setup() {
   Serial.begin(9600);
 
-  pinMode(PIN_LIMIT_RIGHT, INPUT_PULLUP);
-  pinMode(PIN_LIMIT_LEFT,  INPUT_PULLUP);
-  for (uint8_t i = 0; i < ROTARY_COUNT; i++)
-    pinMode(ROTARY_PINS[i], INPUT_PULLUP);
+  pinMode(RPWM, OUTPUT);
+  pinMode(LPWM, OUTPUT);
+  pinMode(R_EN, OUTPUT);
+  pinMode(L_EN, OUTPUT);
+  pinMode(LIMIT_RIGHT, INPUT_PULLUP);
+  pinMode(LIMIT_LEFT,  INPUT_PULLUP);
 
-  /* ---- Create tasks ----                    Name  Stack  Arg  Prio */
-  xTaskCreate(TaskMotion, "MOT", 128, nullptr, 2, nullptr);
-  xTaskCreate(TaskRotary, "ROT", 128, nullptr, 3, nullptr);
-  xTaskCreate(TaskLimit , "LIM",  96, nullptr, 4, nullptr);
+  digitalWrite(R_EN, HIGH); // enable H‑bridge
+  digitalWrite(L_EN, HIGH);
 
-  vTaskStartScheduler();   // kernel takes over
-}
-void loop() {}  // never used
-
-/* ========= TASK: Motion =========
- * Naik-turunkan g_degree sesuai g_direction setiap g_delayMs.
- * Jika g_delayMs == 0  ➜ berhenti (poll tiap 100 ms).
- */
-void TaskMotion(void *pv) {
-  for (;;) {
-    uint16_t delayCopy;
-    int8_t   dirCopy;
-    taskENTER_CRITICAL();
-      delayCopy = g_delayMs;
-      dirCopy   = g_direction;
-    taskEXIT_CRITICAL();
-
-    if (delayCopy == 0) {                // STOP
-      vTaskDelay(pdMS_TO_TICKS(100));
-      continue;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(delayCopy));
-
-    taskENTER_CRITICAL();
-      g_degree += dirCopy;
-      if (g_degree < 0)   g_degree = 0;
-      if (g_degree > 180) g_degree = 180;
-      /* salin untuk printing di luar critical */
-      int16_t dNow  = g_degree;
-      int8_t  dirNow= g_direction;
-      uint16_t spd  = g_delayMs;
-    taskEXIT_CRITICAL();
-
-    Serial.print(F("Deg: "));
-    Serial.print(dNow);
-    Serial.print(F("  Dir: "));
-    Serial.print(dirNow == 1 ? '>' : '<');
-    Serial.print(F("  Delay(ms): "));
-    Serial.println(spd);
+  for (int i = 0; i < 6; i++) {
+    pinMode(switchPins[i], INPUT_PULLUP);
   }
+
+  resetEncoderCounts();
 }
 
-/* ========= TASK: Rotary =========
- * Baca posisi rotary, atur g_delayMs.
- * Mapping: {0,1000,2000,3000,4000,5000}
- */
-void TaskRotary(void *pv) {
-  const uint16_t DELAY_MAP[] = {0, 1000, 2000, 3000, 4000, 5000};
-  uint8_t lastPos = 255;
-  const TickType_t period = pdMS_TO_TICKS(50);
-
-  for (;;) {
-    uint8_t pos = 255;
-    for (uint8_t i = 0; i < ROTARY_COUNT; i++)
-      if (digitalRead(ROTARY_PINS[i]) == LOW) { pos = i; break; } // 0-5
-
-    if (pos != 255 && pos != lastPos) {
-      setDelayMs(DELAY_MAP[pos]);
-      Serial.print(F("Speed set via rotary: "));
-      Serial.println(DELAY_MAP[pos]);
-      lastPos = pos;
+// --------------------- Main loop ------------------------
+void loop() {
+  // ----- 1. Baca rotary switch speed setting -----
+  int currentPosition = -1;
+  for (int i = 0; i < 6; i++) {
+    if (digitalRead(switchPins[i]) == LOW) { // aktif‑low
+      currentPosition = i + 1;
+      delay(50); // debounce sederhana
     }
-    vTaskDelay(period);
   }
-}
 
-/* ========= TASK: Limit =========
- * Ubah arah bila saklar limit LOW.
- */
-void TaskLimit(void *pv) {
-  bool lastR = digitalRead(PIN_LIMIT_RIGHT);
-  bool lastL = digitalRead(PIN_LIMIT_LEFT);
-  const TickType_t period = pdMS_TO_TICKS(20);
-
-  for (;;) {
-    bool r = digitalRead(PIN_LIMIT_RIGHT);
-    bool l = digitalRead(PIN_LIMIT_LEFT);
-
-    if (r != lastR) {
-      Serial.println(r == LOW ? F("RIGHT TRIGGER") : F("RIGHT release"));
-      if (r == LOW) setDirection(+1);    // maju 0➜180
-      lastR = r;
-    }
-    if (l != lastL) {
-      Serial.println(l == LOW ? F("LEFT TRIGGER") : F("LEFT release"));
-      if (l == LOW) setDirection(-1);    // mundur 180➜0
-      lastL = l;
-    }
-    vTaskDelay(period);
+  if (currentPosition != -1 && currentPosition != lastRotaryPos) {
+    Serial.print("Rotary Pos: ");
+    Serial.println(currentPosition);
+    lastRotaryPos = currentPosition;
   }
+
+  if (currentPosition > 1) {
+    motorSpeed = currentPosition * 5; // 2×5=10 dst (0‑255)
+  } else {
+    motorSpeed = 0; // posisi 1 = stop
+  }
+  motorSpeed = constrain(motorSpeed, 0, 255);
+
+  // ----- 2. Limit switch (ubah arah otomatis) -----
+  if (digitalRead(LIMIT_RIGHT) == LOW) direction = false; // sentuh kanan → reverse
+  if (digitalRead(LIMIT_LEFT)  == LOW) direction = true;  // sentuh kiri  → forward
+
+  // ----- 3. Drive motor -----
+  if (motorSpeed == 0) {
+    analogWrite(RPWM, 0);
+    analogWrite(LPWM, 0);
+  } else if (direction) {
+    analogWrite(RPWM, motorSpeed);
+    analogWrite(LPWM, 0);
+  } else {
+    analogWrite(RPWM, 0);
+    analogWrite(LPWM, motorSpeed);
+  }
+
+  // ----- 4. Cetak data encoder -----
+  printEncoderInfo();
 }
