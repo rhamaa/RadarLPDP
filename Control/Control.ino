@@ -83,9 +83,15 @@ void printEncoderInfo() {
   lastPrint = now;
 }
 
+void uiAngle() {
+  long counts      = getEncoderCounts();
+  float angleDeg   = countsToAngle(counts);
+  Serial.println(angleDeg, 1);
+}
+
 // -------------------- Arduino setup ---------------------
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   pinMode(RPWM, OUTPUT);
   pinMode(LPWM, OUTPUT);
@@ -145,5 +151,6 @@ void loop() {
   }
 
   // ----- 4. Cetak data encoder -----
-  printEncoderInfo();
+  // printEncoderInfo();
+  uiAngle();
 }
