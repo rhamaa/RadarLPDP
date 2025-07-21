@@ -120,7 +120,16 @@ def update_sweep_angle(current_angle, direction, increment):
 # --- Worker Thread Functions --- #
 
 def angle_worker(ppi_queue: queue.Queue, stop_event: threading.Event):
-    """Membaca data sudut dari port serial dan mengirimkannya ke antrian PPI."""
+    """Membaca data sudut dari port serial, melakukan sinkronisasi arah, dan
+    mengirim sudut 0-180° terkalibrasi ke antrian PPI.
+    """
+
+    # --- State for synchronization ---
+    prev_raw = None          # sudut mentah terakhir yang diterima
+    prev_dir = None          # +1 (naik) atau -1 (turun)
+    base_offset = 0.0        # sudut mentah yang dipetakan ke 0°/180°
+    EPS_MOVEMENT = 1e-3      # ambang pergerakan (deg) untuk deteksi berhenti
+
     while not stop_event.is_set():
         try:
             # Coba buka port serial
@@ -138,11 +147,46 @@ def angle_worker(ppi_queue: queue.Queue, stop_event: threading.Event):
                             # Konversi langsung ke float untuk mendukung nilai desimal (mis. 45.7)
                             angle = float(angle_str)
                             
-                            # Validasi rentang sudut
-                            if 0 <= angle <= 180:
-                                ppi_queue.put({"type": "sweep", "angle": angle})
+                            # --- Sinkronisasi & translasi sudut ---
+                            if prev_raw is None:
+                                # Pembacaan pertama → jadikan baseline
+                                base_offset = angle
+                                prev_raw = angle
+                                prev_dir = None
+                                ui_angle = 0.0
+                                ppi_queue.put({"type": "sweep", "angle": ui_angle})
+                                continue
+
+                            delta = angle - prev_raw
+                            if abs(delta) < EPS_MOVEMENT:
+                                # nyaris tidak bergerak, abaikan
+                                prev_raw = angle
+                                continue
+
+                            curr_dir = 1 if delta > 0 else -1
+
+                            # Deteksi pergantian arah
+                            if prev_dir is None:
+                                prev_dir = curr_dir
+                                base_offset = angle
+                            elif curr_dir != prev_dir:
+                                # Limit switch terpencet → reset baseline
+                                prev_dir = curr_dir
+                                base_offset = angle
+
+                            # Translasi ke 0-180 berdasarkan arah
+                            if curr_dir == 1:
+                                # raw naik ⇒ UI 0→180
+                                ui_angle = angle - base_offset  # start 0 increasing
                             else:
-                                print(f"Data sudut di luar rentang diterima: {angle}")
+                                # raw turun ⇒ UI 180→0
+                                ui_angle = 180 - (base_offset - angle)  # start 180 decreasing
+
+                            # Clamp ke rentang valid UI
+                            ui_angle = max(0.0, min(180.0, ui_angle))
+
+                            ppi_queue.put({"type": "sweep", "angle": ui_angle})
+                            prev_raw = angle
 
                         except ValueError:
                             print(f"Gagal mengonversi data serial ke angka: '{line.decode('utf-8', errors='ignore')}'")
