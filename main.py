@@ -6,6 +6,9 @@ import dearpygui.dearpygui as dpg
 # Impor fungsi setup dan callback dari modul terpisah
 from app.setup import setup_dpg, initialize_queues_and_events, start_worker_threads
 from app.callbacks import update_ui_from_queues, cleanup_and_exit, resize_callback
+import atexit
+from config import EXTERNAL_WORKER
+from app.external_process import start_worker, stop_worker
 
 # Impor semua widget UI
 from widgets.PPI import create_ppi_widget
@@ -40,6 +43,13 @@ def create_main_layout():
 
 # --- Titik Masuk Aplikasi --- #
 if __name__ == "__main__":
+    # 0. Jalankan background worker eksternal (sebelum app utama)
+    try:
+        start_worker(EXTERNAL_WORKER)
+    except Exception as e:
+        print(f"[external_worker] gagal start: {e}")
+    atexit.register(stop_worker)
+
     # 1. Inisialisasi Dear PyGui (viewport, tema, handler)
     setup_dpg()
 

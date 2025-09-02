@@ -8,6 +8,7 @@ import numpy as np
 # Impor dari file lokal
 from config import APP_SPACING, APP_PADDING, THEME_COLORS
 from widgets.PPI import update_sweep_line, add_target_to_plot
+from app.external_process import stop_worker
 
 # Variabel global untuk state UI
 last_known_angle = 0
@@ -123,4 +124,9 @@ def cleanup_and_exit(stop_event, threads):
     for t in threads.values():
         t.join()
     print("All threads stopped. Destroying context.")
+    # Pastikan proses eksternal juga dihentikan
+    try:
+        stop_worker()
+    except Exception as e:
+        print(f"[external_worker] stop error: {e}")
     dpg.destroy_context()

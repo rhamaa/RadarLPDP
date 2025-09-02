@@ -107,3 +107,59 @@ Untuk solusi permanen, tambahkan user Anda ke grup `dialout`:
     ```
 
 Jendela aplikasi akan muncul dan mulai menampilkan data secara real-time.
+
+---
+
+## Background Worker Eksternal (EXE)
+
+Ringkasan implementasi worker untuk menjalankan file `.exe` di latar belakang sebelum aplikasi utama Python dimulai.
+
+### Tujuan
+- __Menjalankan proses eksternal__ (mis. `cadgetdataSave.exe`) secara terpisah dari UI thread.
+- __Konfigurabel__ dari `config.py` tanpa perlu mengubah kode.
+- __Shutdown rapi__: proses berhenti otomatis saat aplikasi ditutup.
+
+### File Terkait
+- `app/external_process.py`: Manajer proses eksternal (`start_worker()`, `stop_worker()`).
+- `config.py`: Objek `EXTERNAL_WORKER` untuk konfigurasi worker.
+- `main.py`: Bootstrap worker sebelum inisialisasi UI dan registrasi `atexit`.
+- `app/callbacks.py`: Memanggil `stop_worker()` saat `cleanup_and_exit()`.
+
+### Alur Eksekusi Ringkas
+1. `main.py` memanggil `start_worker(EXTERNAL_WORKER)` sebelum `setup_dpg()`.
+2. Jika sukses, proses eksternal berjalan di background (detached) dan tidak mengganggu UI.
+3. `atexit.register(stop_worker)` memastikan proses dihentikan ketika program keluar normal.
+4. `cleanup_and_exit()` juga memanggil `stop_worker()` sebagai pertahanan tambahan.
+5. `stop_worker()` melakukan terminasi grace (SIGTERM/Terminate), lalu kill paksa jika timeout.
+
+### Konfigurasi di `config.py`
+```python
+EXTERNAL_WORKER = {
+    "enabled": True,                 # aktif/nonaktif
+    "exe_name": "cadgetdataSave.exe", # nama file atau path absolut
+    "args": [],                      # argumen tambahan, contoh: ["--port", "9000"]
+    "cwd": None,                     # None = otomatis ke folder exe
+    "env": {},                       # tambahan env vars
+    "only_on_platforms": ["win32"], # jalankan hanya di OS tertentu; [] = semua OS
+}
+```
+
+__Mengubah nama file EXE__: ubah `EXTERNAL_WORKER["exe_name"]` di `config.py`.
+
+### Catatan Platform
+- Default: `only_on_platforms=["win32"]` untuk mencegah error `.exe` di Linux/macOS.
+- Jika ingin jalan di Linux via Wine:
+  - Set `only_on_platforms=[]`.
+  - Sediakan wrapper/skrip yang memanggil `wine cadgetdataSave.exe` atau ubah `exe_name` ke skrip tersebut.
+
+### Resolusi Path EXE
+`external_process.py` mencoba urutan berikut:
+1. Path absolut (jika sudah absolut).
+2. `cwd/` jika `cwd` diset.
+3. Root proyek (`RadarLPDP/`).
+4. Direktori `app/`.
+
+### Troubleshooting
+- __Tidak jalan di Linux__: pastikan `only_on_platforms` sesuai, atau gunakan Wine.
+- __File tidak ditemukan__: cek path yang di-resolve, letakkan EXE di root proyek atau set `cwd`.
+- __Tidak berhenti saat exit__: lihat log; `stop_worker()` akan mencoba terminate lalu kill paksa.

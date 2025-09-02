@@ -7,6 +7,18 @@ import os
 # Ini adalah direktori tempat file main.py berada
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
+# --- Konfigurasi Background Worker Eksternal ---
+# Ubah nama/path exe di sini. Secara default hanya dijalankan di Windows.
+# Di Linux/macOS, set only_on_platforms=[] dan sesuaikan exe_name (misal gunakan wine) jika ingin tetap dijalankan.
+EXTERNAL_WORKER = {
+    "enabled": True,
+    "exe_name": "cadgetdataSave.exe",  # bisa nama file relatif atau path absolut
+    "args": [],                         # contoh: ["--port", "9000"]
+    "cwd": None,                        # None = otomatis ke direktori file exe
+    "env": {},                          # tambahan environment variables
+    "only_on_platforms": ["win32"],    # ganti ke [] untuk semua OS
+}
+
 # --- Konfigurasi Pemantauan File ---
 # Nama file data yang akan dipantau. Path ini sekarang absolut dan andal.
 FILENAME_BASE = "live/live_acquisition_ui.bin"
