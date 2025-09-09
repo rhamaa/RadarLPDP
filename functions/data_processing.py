@@ -9,6 +9,7 @@ import time
 import math
 import collections
 from scipy.fft import fft, fftfreq
+from scipy.signal import find_peaks
 
 # Impor konfigurasi terpusat
 from config import FILENAME, SAMPLE_RATE, WORKER_REFRESH_INTERVAL, SERIAL_PORT, BAUD_RATE, SERIAL_TIMEOUT
@@ -68,6 +69,44 @@ def find_peak_metrics(frequencies, magnitudes):
     peak_mag = magnitudes[peak_index]
     return peak_freq, peak_mag
 
+def find_top_extrema(frequencies, magnitudes, n_extrema=3, prominence_db=3.0, distance_bins=1):
+    """Menemukan beberapa puncak (peaks) dan lembah (valleys) teratas pada spektrum.
+
+    Parameters
+    - frequencies: array frekuensi (dalam kHz) hasil dari compute_fft
+    - magnitudes: array magnitudo dalam dB (hasil dari compute_fft)
+    - n_extrema: berapa banyak puncak/lembah teratas yang ingin diambil
+    - prominence_db: ambang prominence untuk deteksi puncak/lembah (dalam dB)
+    - distance_bins: jarak minimum antar puncak (dalam indeks bin FFT)
+
+    Returns
+    - peaks: list of dict {"index", "freq_khz", "mag_db"}
+    - valleys: list of dict {"index", "freq_khz", "mag_db"}
+    """
+    if len(magnitudes) == 0:
+        return [], []
+
+    # Temukan puncak pada magnitudo dB
+    peak_idx, peak_props = find_peaks(magnitudes, prominence=prominence_db, distance=distance_bins)
+    # Urutkan puncak berdasarkan magnitudo tertinggi
+    peak_idx_sorted = sorted(peak_idx, key=lambda i: magnitudes[i], reverse=True)[:n_extrema]
+    peaks = [
+        {"index": int(i), "freq_khz": float(frequencies[i]), "mag_db": float(magnitudes[i])}
+        for i in peak_idx_sorted
+    ]
+
+    # Temukan lembah dengan mencari puncak pada sinyal terbalik
+    inv = -magnitudes
+    valley_idx, valley_props = find_peaks(inv, prominence=prominence_db, distance=distance_bins)
+    # Urutkan lembah berdasarkan kedalaman (magnitudo paling rendah)
+    valley_idx_sorted = sorted(valley_idx, key=lambda i: magnitudes[i])[:n_extrema]
+    valleys = [
+        {"index": int(i), "freq_khz": float(frequencies[i]), "mag_db": float(magnitudes[i])}
+        for i in valley_idx_sorted
+    ]
+
+    return peaks, valleys
+
 # --- Helper Functions for Workers ---
 
 def process_channel_data(filepath, sr):
@@ -81,14 +120,24 @@ def process_channel_data(filepath, sr):
     peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
     peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
 
+    # Ekstrak beberapa puncak dan lembah teratas beserta indeks bin-nya
+    ch1_peaks, ch1_valleys = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=5, prominence_db=3.0, distance_bins=1)
+    ch2_peaks, ch2_valleys = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=5, prominence_db=3.0, distance_bins=1)
+
     fft_result = {
         "status": "done",
         "freqs_ch1": freqs_ch1, "mag_ch1": mag_ch1,
         "freqs_ch2": freqs_ch2, "mag_ch2": mag_ch2,
         "n_samples": n_samples, "sample_rate": sr,
         "metrics": {
-            "ch1": {"peak_freq": peak_freq_ch1, "peak_mag": peak_mag_ch1},
-            "ch2": {"peak_freq": peak_freq_ch2, "peak_mag": peak_mag_ch2}
+            "ch1": {
+                "peak_freq": peak_freq_ch1, "peak_mag": peak_mag_ch1,
+                "peaks": ch1_peaks, "valleys": ch1_valleys
+            },
+            "ch2": {
+                "peak_freq": peak_freq_ch2, "peak_mag": peak_mag_ch2,
+                "peaks": ch2_peaks, "valleys": ch2_valleys
+            }
         }
     }
     return fft_result, fft_result["metrics"]

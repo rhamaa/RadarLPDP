@@ -63,6 +63,30 @@ def update_ui_from_queues(queues):
             dpg.set_value("ch2_peak_freq", f"{metrics['ch2']['peak_freq']:.2f}")
             dpg.set_value("ch2_peak_mag", f"{metrics['ch2']['peak_mag']:.2f}")
 
+            # Update tabel Peaks & Valleys
+            def update_extrema_table(prefix, peaks, valleys, max_rows=5):
+                # Gabungkan: puncak dulu lalu lembah, batasi ke max_rows
+                combined = [("peak", p) for p in peaks] + [("valley", v) for v in valleys]
+                combined = combined[:max_rows]
+                # Isi baris yang tersedia
+                for i in range(max_rows):
+                    if i < len(combined):
+                        t, item = combined[i]
+                        dpg.set_value(f"{prefix}_ext_{i}_index", str(item.get("index", "-")))
+                        dpg.set_value(f"{prefix}_ext_{i}_freq", f"{item.get('freq_khz', 0.0):.2f}")
+                        dpg.set_value(f"{prefix}_ext_{i}_mag", f"{item.get('mag_db', 0.0):.2f}")
+                        dpg.set_value(f"{prefix}_ext_{i}_type", "Peak" if t == "peak" else "Valley")
+                    else:
+                        dpg.set_value(f"{prefix}_ext_{i}_index", "-")
+                        dpg.set_value(f"{prefix}_ext_{i}_freq", "-")
+                        dpg.set_value(f"{prefix}_ext_{i}_mag", "-")
+                        dpg.set_value(f"{prefix}_ext_{i}_type", "-")
+
+            ch1 = metrics.get('ch1', {})
+            ch2 = metrics.get('ch2', {})
+            update_extrema_table('ch1', ch1.get('peaks', []), ch1.get('valleys', []), max_rows=5)
+            update_extrema_table('ch2', ch2.get('peaks', []), ch2.get('valleys', []), max_rows=5)
+
     except queue.Empty:
         pass
 
