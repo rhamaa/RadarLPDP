@@ -15,7 +15,7 @@ from widgets.PPI import create_ppi_widget
 from widgets.FFT import create_fft_widget
 from widgets.Sinewave import create_sinewave_widget
 from widgets.file import create_file_explorer_widget
-from widgets.controller import create_controller_widget
+from widgets.logo import create_logo_widget
 from widgets.metrics import create_metrics_widget
 
 # --- Definisi Layout UI --- #
@@ -38,8 +38,8 @@ def create_main_layout():
                     create_metrics_widget(parent=metrics_win, width=-1, height=-1)
                 with dpg.child_window(label="File Explorer", tag="file_explorer_window", no_scrollbar=True) as file_explorer_win:
                     create_file_explorer_widget(parent=file_explorer_win, width=-1, height=-1)
-                with dpg.child_window(label="Controller", tag="controller_window", no_scrollbar=True) as controller_win:
-                    create_controller_widget(parent=controller_win, width=-1, height=-1)
+                with dpg.child_window(label="logo", tag="logo_window", no_scrollbar=True) as logo_win:
+                    create_logo_widget(parent=logo_win, width=-1, height=-1)
 
 # --- Titik Masuk Aplikasi --- #
 if __name__ == "__main__":

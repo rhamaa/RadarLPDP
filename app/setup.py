@@ -3,11 +3,36 @@
 import dearpygui.dearpygui as dpg
 import threading
 import queue
+import os
 
 # Impor dari file lokal
-from config import APP_SPACING, APP_PADDING, THEME_COLORS
+from config import APP_SPACING, APP_PADDING, THEME_COLORS, PROJECT_ROOT
 from functions.data_processing import fft_data_worker, sinewave_data_worker, angle_worker
 from app.callbacks import resize_callback
+
+def _preload_textures():
+    """Load commonly used textures into the global texture registry."""
+    if not dpg.does_item_exist("texture_registry"):
+        dpg.add_texture_registry(tag="texture_registry")
+
+    assets_dir = os.path.join(PROJECT_ROOT, "Assets")
+    textures = [
+        ("logo_lpdp", os.path.join(assets_dir, "Logo_LPDP.png")),
+        ("logo_dkst", os.path.join(assets_dir, "DKST_ITB.png")),
+        ("logo_kirei", os.path.join(assets_dir, "KIREI.png")),
+    ]
+
+    for tag, path in textures:
+        if dpg.does_item_exist(tag):
+            continue
+        if not os.path.exists(path):
+            print(f"[textures] file tidak ditemukan: {path}")
+            continue
+        try:
+            width, height, channels, data = dpg.load_image(path)
+            dpg.add_static_texture(width, height, data, tag=tag, parent="texture_registry")
+        except Exception as e:
+            print(f"[textures] gagal memuat {path}: {e}")
 
 def initialize_queues_and_events():
     """Membuat semua queues dan events yang dibutuhkan untuk threading."""
@@ -39,6 +64,13 @@ def start_worker_threads(queues, stop_event):
 def setup_dpg(title='Real-time Radar UI & Spectrum Analyzer', width=1280, height=720):
     """Menginisialisasi Dear PyGui, viewport, tema, dan handler."""
     dpg.create_context()
+
+    # Pastikan registri tekstur global tersedia di root (bukan di dalam window)
+    if not dpg.does_item_exist("texture_registry"):
+        dpg.add_texture_registry(tag="texture_registry")
+
+    # Preload logo textures sebelum membuat window/layout apapun
+    _preload_textures()
 
     # Definisikan tema global
     with dpg.theme() as global_theme:

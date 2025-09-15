@@ -138,7 +138,7 @@ def resize_callback():
     dpg.set_item_height("sinewave_window", panel_height)
     dpg.set_item_height("metrics_window", panel_height)
     dpg.set_item_height("file_explorer_window", panel_height)
-    dpg.set_item_height("controller_window", panel_height)
+    dpg.set_item_height("logo_window", panel_height)
 
 def cleanup_and_exit(stop_event, threads):
     """Memberhentikan thread worker dengan aman dan menutup Dear PyGui."""

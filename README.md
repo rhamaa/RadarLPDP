@@ -44,7 +44,7 @@ UI/
 │   ├── PPI.py                # Widget untuk tampilan radar (custom drawing)
 │   ├── FFT.py                # Widget untuk analisis spektrum (memantau file)
 │   ├── Sinewave.py           # Widget untuk tampilan waveform (memantau file)
-│   ├── controller.py         # Placeholder untuk kontrol
+│   ├── logo.py         # Placeholder untuk kontrol
 │   └── file.py               # Placeholder untuk file explorer
 ├── main.py                   # Titik masuk utama aplikasi, mengatur layout dan thread
 ├── simulate_acquisition.py   # Skrip untuk mensimulasikan update file data .bin
