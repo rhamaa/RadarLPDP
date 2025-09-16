@@ -32,6 +32,7 @@ bool direction     = true;      // true = forward, false = reverse
 long lastCount     = 0;         // For RPM calculation
 unsigned long lastPrint = 0;    // Last time we printed encoder info
 const unsigned long PRINT_INTERVAL = 200; // ms
+const uint8_t pwmMap[7] = {0, 0, 50, 60, 70, 80, 90}; // index 1..6 used: 1=0, 2=50, 3=60, 4=70, 5=80, 6=90
 
 // ------------------- Encoder helpers --------------------
 long getEncoderCounts() {
@@ -127,10 +128,10 @@ void loop() {
     lastRotaryPos = currentPosition;
   }
 
-  if (currentPosition > 1) {
-    motorSpeed = currentPosition * 5; // 2×5=10 dst (0‑255)
-  } else {
-    motorSpeed = 0; // posisi 1 = stop
+  if (currentPosition != -1) {
+    if (currentPosition >= 1 && currentPosition <= 6) {
+      motorSpeed = pwmMap[currentPosition];
+    }
   }
   motorSpeed = constrain(motorSpeed, 0, 255);
 
