@@ -8,8 +8,9 @@ import os
 import time
 import math
 import collections
-from scipy.fft import fft, fftfreq
-from scipy.signal import find_peaks
+from scipy.fft import rfft, rfftfreq
+from scipy.signal import find_peaks, get_window
+from scipy import stats as sp_stats
 
 # Impor konfigurasi terpusat
 from config import FILENAME, SAMPLE_RATE, WORKER_REFRESH_INTERVAL, SERIAL_PORT, BAUD_RATE, SERIAL_TIMEOUT
@@ -34,7 +35,16 @@ def load_and_process_data(filepath, sr):
         if not data: # Jika file kosong
             return np.array([]), np.array([]), 0, sr
 
+        # Pastikan panjang byte genap (kelipatan 2) untuk unpack uint16
+        if (len(data) % 2) != 0:
+            # Truncate 1 byte terakhir yang tidak lengkap
+            data = data[:-1]
+
         values = np.array(struct.unpack(f"<{len(data)//2}H", data), dtype=np.float32)
+
+        # Pastikan jumlah sampel 16-bit genap agar bisa dipetakan ke 2 channel (CH1, CH2)
+        if (len(values) % 2) != 0:
+            values = values[:-1]
         ch1 = values[::2]
         ch2 = values[1::2]
         ch1 -= np.mean(ch1)
@@ -44,20 +54,33 @@ def load_and_process_data(filepath, sr):
         print(f"Error reading or processing file {filepath}: {e}")
         return None, None, None, None
 
-def compute_fft(channel, sample_rate):
-    """Menghitung FFT dan mengonversi magnitudo ke dB."""
+def compute_fft(channel, sample_rate, window: str = "hann"):
+    """Menghitung spektrum dengan SciPy (rFFT) dan mengonversi magnitudo ke dB.
+    - Gunakan jendela (default Hann) untuk mengurangi spectral leakage.
+    - Kembalikan frekuensi dalam kHz dan magnitude dalam dB.
+    """
     n = len(channel)
     if n == 0:
         return np.array([]), np.array([])
-    
-    fft_vals = fft(channel)
-    magnitudes = np.abs(fft_vals)[:n//2]
-    
-    # Konversi ke dB, hindari log(0) dengan menambahkan nilai epsilon kecil
-    magnitudes_db = 20 * np.log10(magnitudes + 1e-9)
-    
-    # Hitung frekuensi dan konversi ke KHz
-    frequencies_khz = fftfreq(n, d=1/sample_rate)[:n//2] / 1000
+
+    x = np.asarray(channel, dtype=float)
+    if window:
+        try:
+            w = get_window(window, n, fftbins=True)
+            x = x * w
+        except Exception:
+            # Fallback tanpa window jika nama window tidak valid
+            pass
+
+    # Real FFT untuk sinyal real → hanya sisi positif (n//2+1)
+    Y = rfft(x)
+    magnitudes = np.abs(Y)
+
+    # Konversi ke dB, hindari log(0)
+    magnitudes_db = 20.0 * np.log10(magnitudes + 1e-12)
+
+    # Frekuensi dalam kHz
+    frequencies_khz = rfftfreq(n, d=1.0 / sample_rate) / 1000.0
     return frequencies_khz, magnitudes_db
 
 def find_peak_metrics(frequencies, magnitudes):
@@ -107,7 +130,98 @@ def find_top_extrema(frequencies, magnitudes, n_extrema=3, prominence_db=3.0, di
 
     return peaks, valleys
 
-# --- Helper Functions for Workers ---
+# --- Helper Functions for Workers --- #
+
+def compute_basic_stats(arr: np.ndarray) -> dict:
+    """Hitung statistik dasar menggunakan SciPy untuk konsistensi.
+    - mean, variance, min, max dari scipy.stats.describe
+    - std = sqrt(variance)
+    - rms menggunakan NumPy (tidak ada helper langsung di SciPy)
+    """
+    if arr is None or len(arr) == 0:
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0, "rms": 0.0}
+    desc = sp_stats.describe(np.asarray(arr, dtype=float), ddof=0)
+    mean = float(desc.mean)
+    var = float(desc.variance) if desc.variance is not None else float(np.var(arr))
+    std = float(np.sqrt(var))
+    min_val, max_val = map(float, desc.minmax)
+    rms = float(np.sqrt(np.mean(np.square(arr))))
+    return {"mean": mean, "std": std, "min": min_val, "max": max_val, "rms": rms}
+
+def compute_fft_analysis(channel: np.ndarray, sample_rate: float,
+                         n_extrema: int = 5, prominence_db: float = 3.0, distance_bins: int = 10) -> dict:
+    """Pembungkus analisis FFT satu channel: frekuensi, magnitudo dB, top peaks/valleys, dan puncak maksimum."""
+    n = len(channel) if channel is not None else 0
+    if n == 0:
+        return {
+            "frequencies": np.array([]),
+            "magnitudes": np.array([]),
+            "peak_frequencies": np.array([]),
+            "peak_magnitudes": np.array([]),
+            "max_freq": 0.0,
+            "max_mag": 0.0,
+        }
+
+    freqs_khz, mags_db = compute_fft(channel, sample_rate)
+    peaks, valleys = find_top_extrema(freqs_khz, mags_db, n_extrema=n_extrema,
+                                      prominence_db=prominence_db, distance_bins=distance_bins)
+    peak_freq, peak_mag = find_peak_metrics(freqs_khz, mags_db)
+
+    return {
+        "frequencies": np.ascontiguousarray(freqs_khz, dtype=np.float64),
+        "magnitudes": np.ascontiguousarray(mags_db, dtype=np.float64),
+        "peak_frequencies": np.ascontiguousarray([p["freq_khz"] for p in peaks], dtype=np.float64),
+        "peak_magnitudes": np.ascontiguousarray([p["mag_db"] for p in peaks], dtype=np.float64),
+        "peak_indices": np.ascontiguousarray([p["index"] for p in peaks], dtype=np.int32),
+        "max_freq": float(peak_freq),
+        "max_mag": float(peak_mag),
+    }
+
+def generate_time_axis_s(n_samples: int, sample_rate: float) -> np.ndarray:
+    """Bangun sumbu waktu dalam detik (float64, C-contiguous)."""
+    if n_samples <= 0 or sample_rate <= 0:
+        return np.array([], dtype=np.float64)
+    return np.ascontiguousarray(np.linspace(0, n_samples / sample_rate, n_samples, endpoint=False), dtype=np.float64)
+
+def analyze_loaded_data(ch1: np.ndarray, ch2: np.ndarray, sample_rate: float,
+                        n_samples: int | None = None, duration_s: float | None = None) -> dict:
+    """Analisis lengkap dua channel yang sudah dimuat (FFT + statistik) dan info file."""
+    ch1_fft = compute_fft_analysis(ch1, sample_rate)
+    ch2_fft = compute_fft_analysis(ch2, sample_rate)
+    ch1_stats = compute_basic_stats(ch1)
+    ch2_stats = compute_basic_stats(ch2)
+    if n_samples is None:
+        n_samples = len(ch1) if ch1 is not None else 0
+    if duration_s is None and sample_rate > 0:
+        duration_s = n_samples / sample_rate
+    return {
+        "ch1_fft": ch1_fft,
+        "ch2_fft": ch2_fft,
+        "ch1_stats": ch1_stats,
+        "ch2_stats": ch2_stats,
+        "file_info": {
+            "duration": float(duration_s or 0.0),
+            "n_samples": int(n_samples or 0),
+            "sample_rate": float(sample_rate or 0.0),
+        },
+    }
+
+def load_file_and_prepare(filepath: str, sample_rate: float) -> tuple[dict | None, str | None]:
+    """Memuat file biner dan menyiapkan struktur data standar untuk UI popup.
+    Return (data_dict, error_msg).
+    """
+    ch1_data, ch2_data, n_samples, sr = load_and_process_data(filepath, sample_rate)
+    if ch1_data is None or n_samples is None or n_samples <= 0:
+        return None, "File tidak ditemukan atau kosong"
+    time_axis = generate_time_axis_s(n_samples, sr)
+    return {
+        "ch1": np.ascontiguousarray(ch1_data, dtype=np.float64),
+        "ch2": np.ascontiguousarray(ch2_data, dtype=np.float64),
+        "time_axis": time_axis,
+        "n_samples": n_samples,
+        "sample_rate": sr,
+        "duration": (n_samples / sr) if sr else 0.0,
+    }, None
 
 def process_channel_data(filepath, sr):
     """Memuat data dari file, memproses FFT, dan mengembalikan hasilnya."""
