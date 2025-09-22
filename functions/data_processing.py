@@ -18,7 +18,7 @@ import serial # Tambahkan impor untuk komunikasi serial
 
 # --- Helper Functions --- #
 
-def (center_x, center_y, angle_deg, radius):
+def polar_to_cartesian(center_x, center_y, angle_deg, radius):
     """Konversi koordinat polar ke Cartesian."""
     angle_rad = math.radians(angle_deg)
     return center_x + radius * math.cos(angle_rad), center_y + radius * math.sin(angle_rad)
