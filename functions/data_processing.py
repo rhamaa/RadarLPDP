@@ -269,7 +269,7 @@ def calculate_target_distance(metrics):
     distance = (val_ch1 + val_ch2) / 1000
     
     if distance > 1:
-        return min(distance, 50) # Kembalikan jarak yang sudah di-clamp
+        return min(distance, 15) # Kembalikan jarak yang sudah di-clamp
     return None
 
 def update_sweep_angle(current_angle, direction, increment):

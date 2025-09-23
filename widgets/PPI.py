@@ -26,7 +26,7 @@ def create_ppi_widget(parent, width, height):
     with dpg.child_window(parent=parent, width=width, height=height, no_scrollbar=True):
         dpg.add_text("Plan Position Indicator (PPI) - Jarak (km)")
         
-        axis_limit = 50
+        axis_limit = 15
         
         with dpg.plot(label="PPI Display", width=-1, height=-1, equal_aspects=True):
             dpg.add_plot_legend()
@@ -35,10 +35,10 @@ def create_ppi_widget(parent, width, height):
             dpg.set_axis_limits(x_axis, -axis_limit, axis_limit)
             
             y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="", no_tick_labels=True, lock_min=True, lock_max=True)
-            dpg.set_axis_limits(y_axis, 0, axis_limit) # Batas Y dari 0 hingga 50
+            dpg.set_axis_limits(y_axis, 0, axis_limit) # Batas Y dari 0 hingga 15
 
             # Menggambar busur jarak 180 derajat (range rings)
-            for r in range(10, axis_limit + 1, 10):
+            for r in range(3, axis_limit + 1, 3):
                 theta = np.linspace(0, np.pi, 100) # 0 hingga pi untuk 180 derajat
                 x = r * np.cos(theta)
                 y = r * np.sin(theta)
@@ -55,8 +55,8 @@ def update_sweep_line(angle):
     """Hanya memperbarui posisi garis sapuan."""
     if dpg.does_item_exist("ppi_sweep_line"):
         angle_rad = np.deg2rad(angle)
-        x_end = 50 * np.cos(angle_rad)
-        y_end = 50 * np.sin(angle_rad)
+        x_end = 15 * np.cos(angle_rad)
+        y_end = 15 * np.sin(angle_rad)
         dpg.set_value("ppi_sweep_line", ([0, x_end], [0, y_end]))
 
 def add_target_to_plot(targets):
