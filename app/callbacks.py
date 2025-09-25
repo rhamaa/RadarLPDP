@@ -42,65 +42,81 @@ def update_ui_from_queues(queues):
     # --- Update FFT & Metrics --- #
     try:
         fft_data = queues['fft'].get_nowait()
-        status = fft_data.get("status")
-        
-        if status == "processing":
-            dpg.set_value("fft_status_text", "Processing...")
-        elif status in ["error", "waiting"]:
-            dpg.set_value("fft_status_text", fft_data.get("message"))
-        elif status == "done":
-            dpg.set_value("fft_status_text", f"Updated: {time.strftime('%H:%M:%S')}")
-            
-            # Update plot FFT
-            dpg.set_value('fft_ch1_series', [fft_data["freqs_ch1"], fft_data["mag_ch1"]])
-            dpg.set_value('fft_ch2_series', [fft_data["freqs_ch2"], fft_data["mag_ch2"]])
-            dpg.set_axis_limits_auto("fft_yaxis")
+        # Jika UI FFT tidak ada (misal hanya PPI ditampilkan), abaikan update namun tetap konsumsi queue
+        if not dpg.does_item_exist("fft_status_text"):
+            pass
+        else:
+            status = fft_data.get("status")
+            if status == "processing":
+                dpg.set_value("fft_status_text", "Processing...")
+            elif status in ["error", "waiting"]:
+                dpg.set_value("fft_status_text", fft_data.get("message"))
+            elif status == "done":
+                dpg.set_value("fft_status_text", f"Updated: {time.strftime('%H:%M:%S')}")
+                # Update plot FFT
+                if dpg.does_item_exist('fft_ch1_series'):
+                    dpg.set_value('fft_ch1_series', [fft_data["freqs_ch1"], fft_data["mag_ch1"]])
+                if dpg.does_item_exist('fft_ch2_series'):
+                    dpg.set_value('fft_ch2_series', [fft_data["freqs_ch2"], fft_data["mag_ch2"]])
+                if dpg.does_item_exist("fft_yaxis"):
+                    dpg.set_axis_limits_auto("fft_yaxis")
 
-            # Update widget metrik
-            metrics = fft_data["metrics"]
-            dpg.set_value("ch1_peak_freq", f"{metrics['ch1']['peak_freq']:.2f}")
-            dpg.set_value("ch1_peak_mag", f"{metrics['ch1']['peak_mag']:.2f}")
-            dpg.set_value("ch2_peak_freq", f"{metrics['ch2']['peak_freq']:.2f}")
-            dpg.set_value("ch2_peak_mag", f"{metrics['ch2']['peak_mag']:.2f}")
+                # Update widget metrik
+                metrics = fft_data.get("metrics", {})
+                if dpg.does_item_exist("ch1_peak_freq"):
+                    ch1 = metrics.get('ch1', {})
+                    dpg.set_value("ch1_peak_freq", f"{ch1.get('peak_freq', 0.0):.2f}")
+                    dpg.set_value("ch1_peak_mag", f"{ch1.get('peak_mag', 0.0):.2f}")
+                if dpg.does_item_exist("ch2_peak_freq"):
+                    ch2 = metrics.get('ch2', {})
+                    dpg.set_value("ch2_peak_freq", f"{ch2.get('peak_freq', 0.0):.2f}")
+                    dpg.set_value("ch2_peak_mag", f"{ch2.get('peak_mag', 0.0):.2f}")
 
-            # Update tabel Peaks & Valleys
-            def update_extrema_table(prefix, peaks, valleys, max_rows=5):
-                # Gabungkan: puncak dulu lalu lembah, batasi ke max_rows
-                combined = [("peak", p) for p in peaks] + [("valley", v) for v in valleys]
-                combined = combined[:max_rows]
-                # Isi baris yang tersedia
-                for i in range(max_rows):
-                    if i < len(combined):
-                        t, item = combined[i]
-                        dpg.set_value(f"{prefix}_ext_{i}_index", str(item.get("index", "-")))
-                        dpg.set_value(f"{prefix}_ext_{i}_freq", f"{item.get('freq_khz', 0.0):.2f}")
-                        dpg.set_value(f"{prefix}_ext_{i}_mag", f"{item.get('mag_db', 0.0):.2f}")
-                        dpg.set_value(f"{prefix}_ext_{i}_type", "Peak" if t == "peak" else "Valley")
-                    else:
-                        dpg.set_value(f"{prefix}_ext_{i}_index", "-")
-                        dpg.set_value(f"{prefix}_ext_{i}_freq", "-")
-                        dpg.set_value(f"{prefix}_ext_{i}_mag", "-")
-                        dpg.set_value(f"{prefix}_ext_{i}_type", "-")
+                # Update tabel Peaks & Valleys bila ada
+                def update_extrema_table(prefix, peaks, valleys, max_rows=5):
+                    for i in range(max_rows):
+                        row_index_id = f"{prefix}_ext_{i}_index"
+                        row_freq_id = f"{prefix}_ext_{i}_freq"
+                        row_mag_id = f"{prefix}_ext_{i}_mag"
+                        row_type_id = f"{prefix}_ext_{i}_type"
+                        if not all(dpg.does_item_exist(x) for x in [row_index_id, row_freq_id, row_mag_id, row_type_id]):
+                            continue
+                        if i < len(peaks) + len(valleys):
+                            combined = [("peak", p) for p in peaks] + [("valley", v) for v in valleys]
+                            t, item = combined[i]
+                            dpg.set_value(row_index_id, str(item.get("index", "-")))
+                            dpg.set_value(row_freq_id, f"{item.get('freq_khz', 0.0):.2f}")
+                            dpg.set_value(row_mag_id, f"{item.get('mag_db', 0.0):.2f}")
+                            dpg.set_value(row_type_id, "Peak" if t == "peak" else "Valley")
+                        else:
+                            dpg.set_value(row_index_id, "-")
+                            dpg.set_value(row_freq_id, "-")
+                            dpg.set_value(row_mag_id, "-")
+                            dpg.set_value(row_type_id, "-")
 
-            ch1 = metrics.get('ch1', {})
-            ch2 = metrics.get('ch2', {})
-            update_extrema_table('ch1', ch1.get('peaks', []), ch1.get('valleys', []), max_rows=5)
-            update_extrema_table('ch2', ch2.get('peaks', []), ch2.get('valleys', []), max_rows=5)
-
+                ch1 = metrics.get('ch1', {})
+                ch2 = metrics.get('ch2', {})
+                update_extrema_table('ch1', ch1.get('peaks', []), ch1.get('valleys', []), max_rows=5)
+                update_extrema_table('ch2', ch2.get('peaks', []), ch2.get('valleys', []), max_rows=5)
     except queue.Empty:
         pass
 
     # --- Update Sinewave --- #
     try:
         sinewave_data = queues['sinewave'].get_nowait()
-        if sinewave_data.get("status") == "done":
-            time_axis = np.ascontiguousarray(sinewave_data["time_axis"])
-            ch1_data = np.ascontiguousarray(sinewave_data["ch1_data"])
-            ch2_data = np.ascontiguousarray(sinewave_data["ch2_data"])
-            dpg.set_value("sinewave_ch1_series", [time_axis, ch1_data])
-            dpg.set_value("sinewave_ch2_series", [time_axis, ch2_data])
-            dpg.set_axis_limits_auto("sinewave_xaxis")
-            dpg.set_axis_limits_auto("sinewave_yaxis")
+        if not dpg.does_item_exist("sinewave_ch1_series"):
+            pass
+        else:
+            if sinewave_data.get("status") == "done":
+                time_axis = np.ascontiguousarray(sinewave_data["time_axis"])
+                ch1_data = np.ascontiguousarray(sinewave_data["ch1_data"])
+                ch2_data = np.ascontiguousarray(sinewave_data["ch2_data"])
+                dpg.set_value("sinewave_ch1_series", [time_axis, ch1_data])
+                dpg.set_value("sinewave_ch2_series", [time_axis, ch2_data])
+                if dpg.does_item_exist("sinewave_xaxis"):
+                    dpg.set_axis_limits_auto("sinewave_xaxis")
+                if dpg.does_item_exist("sinewave_yaxis"):
+                    dpg.set_axis_limits_auto("sinewave_yaxis")
     except queue.Empty:
         pass
 
@@ -116,29 +132,38 @@ def resize_callback():
     padding = APP_PADDING * 2
     spacing = APP_SPACING
 
-    # Kalkulasi lebar kolom
-    left_col_width = int(viewport_width * 0.7) - spacing
-    right_col_width = viewport_width - left_col_width - (spacing * 2)
+    # Kalkulasi lebar kolom (adaptif bila right_column tidak ada)
+    left_exists = dpg.does_item_exist("left_column")
+    right_exists = dpg.does_item_exist("right_column")
 
-    dpg.set_item_width("left_column", left_col_width)
-    dpg.set_item_width("right_column", right_col_width)
+    if left_exists and right_exists:
+        left_col_width = int(viewport_width * 0.7) - spacing
+        right_col_width = viewport_width - left_col_width - (spacing * 2)
+        dpg.set_item_width("left_column", max(left_col_width, 0))
+        dpg.set_item_width("right_column", max(right_col_width, 0))
+    elif left_exists:
+        dpg.set_item_width("left_column", max(viewport_width - padding, 0))
 
-    # Kalkulasi tinggi panel di kolom kiri
+    # Kalkulasi tinggi panel di kolom kiri (adaptif bila hanya PPI)
     available_height_left = viewport_height - padding
-    ppi_height = int(available_height_left * 0.65) - spacing
-    fft_height = available_height_left - ppi_height - spacing
+    if dpg.does_item_exist("ppi_window") and not dpg.does_item_exist("fft_window"):
+        # Hanya PPI: pakai semua tinggi yang tersedia
+        dpg.set_item_height("ppi_window", max(available_height_left, 0))
+    else:
+        # PPI + FFT
+        if dpg.does_item_exist("ppi_window") and dpg.does_item_exist("fft_window"):
+            ppi_height = int(available_height_left * 0.65) - spacing
+            fft_height = available_height_left - ppi_height - spacing
+            dpg.set_item_height("ppi_window", max(ppi_height, 0))
+            dpg.set_item_height("fft_window", max(fft_height, 0))
 
-    dpg.set_item_height("ppi_window", ppi_height)
-    dpg.set_item_height("fft_window", fft_height)
-
-    # Kalkulasi tinggi panel di kolom kanan
-    available_height_right = viewport_height - padding
-    panel_height = (available_height_right - (spacing * 3)) // 4
-
-    dpg.set_item_height("sinewave_window", panel_height)
-    dpg.set_item_height("metrics_window", panel_height)
-    dpg.set_item_height("file_explorer_window", panel_height)
-    dpg.set_item_height("logo_window", panel_height)
+    # Kalkulasi tinggi panel di kolom kanan (jika ada)
+    if right_exists:
+        available_height_right = viewport_height - padding
+        panel_height = (available_height_right - (spacing * 3)) // 4
+        for tag in ["sinewave_window", "metrics_window", "file_explorer_window", "logo_window"]:
+            if dpg.does_item_exist(tag):
+                dpg.set_item_height(tag, max(panel_height, 0))
 
 def cleanup_and_exit(stop_event, threads):
     """Memberhentikan thread worker dengan aman dan menutup Dear PyGui."""
