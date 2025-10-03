@@ -8,7 +8,13 @@ FILENAME = "live/live_acquisition_ui.bin"
 # Pastikan direktori .live ada
 os.makedirs(os.path.dirname(FILENAME), exist_ok=True)
 SAMPLE_RATE = 20_000_000
-NUM_SAMPLES = 4096  # Jumlah sampel per channel
+NUM_SAMPLES = 8192  # Jumlah sampel per channel
+
+# Konfigurasi frekuensi (dalam Hz)
+CH1_BASE_FREQ = 900_000
+CH1_JITTER = 1_000
+CH2_BASE_FREQ = 1_500_000
+CH2_JITTER = 2_000
 
 print(f"Starting simulation. Writing to '{FILENAME}' every 2 seconds.")
 print("Run main.py in another terminal to see the live updates.")
@@ -17,8 +23,8 @@ print("Press Ctrl+C to stop.")
 try:
     while True:
         # Buat sinyal gabungan dengan frekuensi yang sedikit berubah
-        freq1 = 90000 + np.random.randint(-1000, 1000)
-        freq2 = 150000 + np.random.randint(-2000, 2000)
+        freq1 = CH1_BASE_FREQ + np.random.randint(-CH1_JITTER, CH1_JITTER + 1)
+        freq2 = CH2_BASE_FREQ + np.random.randint(-CH2_JITTER, CH2_JITTER + 1)
         
         t = np.linspace(0, NUM_SAMPLES / SAMPLE_RATE, NUM_SAMPLES, endpoint=False)
         
@@ -35,7 +41,10 @@ try:
         with open(FILENAME, "wb") as f:
             f.write(struct.pack(f'<{len(interleaved_data)}H', *interleaved_data))
         
-        print(f"File updated at {time.strftime('%H:%M:%S')} with freqs ~{freq1/1000:.1f}kHz and ~{freq2/1000:.1f}kHz")
+        print(
+            f"File updated at {time.strftime('%H:%M:%S')} with freqs "
+            f"~{freq1/1000:.1f}kHz (CH1) and ~{freq2/1000:.1f}kHz (CH2)"
+        )
         
         # Tunggu sebelum update berikutnya
         time.sleep(0.05)
