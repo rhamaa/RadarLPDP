@@ -13,22 +13,27 @@ Data Format:
 - File Format: [CH1_0, CH3_0, CH1_1, CH3_1, ...]
 """
 
-import panel as pn
+import datetime
+import os
+from pathlib import Path
+from typing import Dict, Tuple, Any, Optional
+
+import holoviews as hv
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import panel as pn
+import param
+from holoviews import opts
 from scipy import signal
 from scipy.fft import fft, fftfreq, rfft, rfftfreq
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-import io
-import os
-import struct
-import datetime
-from pathlib import Path
-import holoviews as hv
-from holoviews import opts
-import param
 from sklearn.cluster import DBSCAN
+
+from functions.data_processing import (
+    load_and_process_data,
+    compute_fft,
+    find_peak_metrics,
+)
 
 # Enable Panel extensions
 pn.extension('tabulator')
@@ -79,83 +84,93 @@ class RFAnalytics(param.Parameterized):
         self.freq_axis = np.array([])
         self.last_update = datetime.datetime.now()
         
-    def load_binary_data(self, filepath):
-        """
-        Load dan parsing data binary dari file akuisisi
+    def load_binary_data(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, bool]:
+        """Load and parse binary data from acquisition file.
         
+        Uses shared data loading function from data_processing module.
+        Converts raw ADC values to voltage.
+        
+        Args:
+            filepath: Path to binary data file
+            
         Returns:
-            tuple: (ch1_data, ch2_data, success)
+            Tuple of (ch1_voltage, ch2_voltage, success)
         """
-        try:
-            if not os.path.exists(filepath):
-                return np.array([]), np.array([]), False
-                
-            # Read binary file as uint16
-            with open(filepath, 'rb') as f:
-                raw_data = f.read()
-                
-            # Convert to numpy array
-            data_array = np.frombuffer(raw_data, dtype=np.uint16)
-            
-            if len(data_array) < 2:
-                return np.array([]), np.array([]), False
-                
-            # Deinterleave: CH1 (odd indices), CH2 (even indices) 
-            # Berdasarkan kode C: [CH1_0, CH3_0, CH1_1, CH3_1, ...]
-            ch1_data = data_array[0::2]  # indices 0, 2, 4, ... (CH1)
-            ch2_data = data_array[1::2]  # indices 1, 3, 5, ... (CH3)
-            
-            # Convert to voltage (assuming full scale range, adjust sesuai ADC spec)
-            # PCI-9846H biasanya ±10V range dengan 16-bit resolution
-            ch1_voltage = (ch1_data.astype(np.float64) - 32768) * (20.0 / 65536)
-            ch2_voltage = (ch2_data.astype(np.float64) - 32768) * (20.0 / 65536)
-            
-            return ch1_voltage, ch2_voltage, True
-            
-        except Exception as e:
-            print(f"Error loading data: {e}")
+        ch1_data, ch2_data, n_samples, _ = load_and_process_data(filepath, SAMPLE_RATE)
+        
+        if ch1_data is None or n_samples is None or n_samples <= 0:
             return np.array([]), np.array([]), False
+        
+        # Convert to voltage (PCI-9846H: ±10V range, 16-bit resolution)
+        # Note: data_processing already removes DC offset, so we add back the offset
+        # before voltage conversion for accurate representation
+        ch1_voltage = ch1_data.astype(np.float64) * (20.0 / 65536)
+        ch2_voltage = ch2_data.astype(np.float64) * (20.0 / 65536)
+        
+        return ch1_voltage, ch2_voltage, True
     
-    def compute_time_domain_metrics(self, data):
-        """Compute time domain statistics"""
+    def compute_time_domain_metrics(self, data: np.ndarray) -> Dict[str, float]:
+        """Compute time domain statistics.
+        
+        Args:
+            data: Input signal data
+            
+        Returns:
+            Dictionary containing RMS, peak, mean, std, p2p, and crest factor
+        """
         if len(data) == 0:
             return {}
-            
+        
+        rms = np.sqrt(np.mean(data**2))
+        peak = np.max(np.abs(data))
+        
         return {
-            'rms': np.sqrt(np.mean(data**2)),
-            'peak': np.max(np.abs(data)),
+            'rms': rms,
+            'peak': peak,
             'mean': np.mean(data),
             'std': np.std(data),
-            'p2p': np.ptp(data),  # peak-to-peak
-            'crest_factor': np.max(np.abs(data)) / np.sqrt(np.mean(data**2))
+            'p2p': np.ptp(data),
+            'crest_factor': peak / rms if rms > 0 else 0
         }
     
-    def compute_frequency_domain(self, data, window_func='hanning'):
-        """Compute FFT and frequency domain metrics"""
+    def compute_frequency_domain(
+        self,
+        data: np.ndarray,
+        window_func: str = 'hanning'
+    ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
+        """Compute FFT and frequency domain metrics.
+        
+        Args:
+            data: Input signal data
+            window_func: Window function name
+            
+        Returns:
+            Tuple of (metrics_dict, frequencies, magnitude_db)
+        """
         if len(data) == 0:
             return {}, np.array([]), np.array([])
-            
-        # Apply window function
-        if window_func != 'none':
-            window = getattr(signal.windows, window_func)(len(data))
-            data_windowed = data * window
-        else:
-            data_windowed = data
-            
-        # Compute FFT
-        fft_data = rfft(data_windowed, n=self.fft_size)
-        freqs = rfftfreq(self.fft_size, 1/SAMPLE_RATE)
         
-        # Magnitude spectrum (dB)
-        magnitude_db = 20 * np.log10(np.abs(fft_data) + 1e-12)
+        # Use shared FFT computation (returns kHz, we need Hz)
+        freqs_khz, magnitude_db = compute_fft(
+            data.astype(np.float32),
+            SAMPLE_RATE,
+            window=window_func if window_func != 'none' else ''
+        )
+        freqs = freqs_khz * 1000  # Convert kHz to Hz
+        
+        # Compute FFT for spectral centroid calculation
+        fft_data = rfft(data, n=self.fft_size)
         
         # Find peaks
-        peaks, properties = signal.find_peaks(magnitude_db, height=-60, distance=10)
+        peaks, _ = signal.find_peaks(magnitude_db, height=-60, distance=10)
+        
+        # Get peak frequency and magnitude
+        peak_freq, peak_mag = find_peak_metrics(freqs_khz, magnitude_db)
         
         # Frequency domain metrics
         metrics = {
-            'peak_freq': freqs[np.argmax(magnitude_db)] if len(magnitude_db) > 0 else 0,
-            'peak_magnitude': np.max(magnitude_db) if len(magnitude_db) > 0 else 0,
+            'peak_freq': peak_freq * 1000,  # Convert kHz to Hz
+            'peak_magnitude': peak_mag,
             'bandwidth_3db': self._compute_3db_bandwidth(freqs, magnitude_db),
             'spectral_centroid': np.sum(freqs * np.abs(fft_data)) / np.sum(np.abs(fft_data)),
             'num_peaks': len(peaks),
@@ -164,29 +179,57 @@ class RFAnalytics(param.Parameterized):
         
         return metrics, freqs, magnitude_db
     
-    def _compute_3db_bandwidth(self, freqs, magnitude_db):
-        """Compute 3dB bandwidth"""
+    def _compute_3db_bandwidth(
+        self,
+        freqs: np.ndarray,
+        magnitude_db: np.ndarray
+    ) -> float:
+        """Compute 3dB bandwidth.
+        
+        Args:
+            freqs: Frequency array
+            magnitude_db: Magnitude spectrum in dB
+            
+        Returns:
+            3dB bandwidth in Hz
+        """
         if len(magnitude_db) == 0:
-            return 0
+            return 0.0
+            
         max_mag = np.max(magnitude_db)
         indices_3db = np.where(magnitude_db >= max_mag - 3)[0]
+        
         if len(indices_3db) > 1:
-            return freqs[indices_3db[-1]] - freqs[indices_3db[0]]
-        return 0
+            return float(freqs[indices_3db[-1]] - freqs[indices_3db[0]])
+        return 0.0
     
-    def _estimate_snr(self, magnitude_db):
-        """Estimate SNR (simple method)"""
+    def _estimate_snr(self, magnitude_db: np.ndarray) -> float:
+        """Estimate SNR using simple method.
+        
+        Args:
+            magnitude_db: Magnitude spectrum in dB
+            
+        Returns:
+            Estimated SNR in dB
+        """
         if len(magnitude_db) == 0:
-            return 0
+            return 0.0
+            
         signal_power = np.max(magnitude_db)
         noise_floor = np.median(magnitude_db)
-        return signal_power - noise_floor
+        return float(signal_power - noise_floor)
     
-    def create_time_domain_plot(self):
-        """Create time domain visualization"""
+    def create_time_domain_plot(self) -> pn.pane.Markdown | pn.pane.Matplotlib:
+        """Create time domain visualization.
+        
+        Returns:
+            Panel pane containing the plot or error message
+        """
         if len(self.data_ch1) == 0:
-            return pn.pane.Markdown("## ⚠️ No data available", 
-                                  styles={'text-align': 'center', 'color': '#ff6b6b'})
+            return pn.pane.Markdown(
+                "## ⚠️ No data available",
+                styles={'text-align': 'center', 'color': '#ff6b6b'}
+            )
             
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
         fig.patch.set_facecolor('#f8f9fa')
@@ -217,11 +260,17 @@ class RFAnalytics(param.Parameterized):
         plt.tight_layout(pad=3.0)
         return pn.pane.Matplotlib(fig, sizing_mode='stretch_both')
     
-    def create_frequency_domain_plot(self):
-        """Create frequency domain visualization"""
+    def create_frequency_domain_plot(self) -> pn.pane.Markdown | pn.pane.Matplotlib:
+        """Create frequency domain visualization.
+        
+        Returns:
+            Panel pane containing the FFT plot or error message
+        """
         if len(self.data_ch1) == 0:
-            return pn.pane.Markdown("## ⚠️ No data available", 
-                                  styles={'text-align': 'center', 'color': '#ff6b6b'})
+            return pn.pane.Markdown(
+                "## ⚠️ No data available",
+                styles={'text-align': 'center', 'color': '#ff6b6b'}
+            )
             
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
         fig.patch.set_facecolor('#f8f9fa')
