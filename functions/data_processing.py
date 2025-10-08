@@ -244,6 +244,94 @@ def find_top_extrema(
 
     return peaks, valleys
 
+
+def find_target_extrema(
+    frequencies: NDArray[np.float64],
+    magnitudes: NDArray[np.float64],
+    freq_threshold_khz: float = 10_000.0,
+    n_extrema: int = 3,
+    prominence_db: float = 3.0,
+    distance_bins: int = 1
+) -> Tuple[List[Dict[str, Any]], float, float]:
+    """Find top peaks above a frequency threshold (for target detection).
+    
+    This function filters the spectrum to only consider frequencies above
+    a specified threshold (default 10 MHz) to identify target signals.
+    
+    Args:
+        frequencies: Frequency array in kHz from compute_fft
+        magnitudes: Magnitude array in dB from compute_fft
+        freq_threshold_khz: Frequency threshold in kHz (default: 10,000 kHz = 10 MHz)
+        n_extrema: Number of top peaks to extract
+        prominence_db: Prominence threshold for peak detection in dB
+        distance_bins: Minimum distance between peaks in FFT bins
+        
+    Returns:
+        Tuple of (peaks, highest_peak_freq, highest_peak_mag) where:
+        - peaks: List of dicts with keys 'index', 'freq_khz', 'mag_db'
+        - highest_peak_freq: Frequency of highest peak in kHz
+        - highest_peak_mag: Magnitude of highest peak in dB
+    """
+    if len(magnitudes) == 0:
+        return [], 0.0, 0.0
+    
+    # Filter frequencies above threshold
+    freq_mask = frequencies >= freq_threshold_khz
+    
+    if not np.any(freq_mask):
+        # No frequencies above threshold
+        return [], 0.0, 0.0
+    
+    # Get filtered data
+    filtered_freqs = frequencies[freq_mask]
+    filtered_mags = magnitudes[freq_mask]
+    filtered_indices = np.where(freq_mask)[0]
+    
+    # Find peaks in filtered spectrum
+    peak_idx, _ = find_peaks(
+        filtered_mags,
+        prominence=prominence_db,
+        distance=distance_bins
+    )
+    
+    if len(peak_idx) == 0:
+        # No peaks found, return highest point
+        max_idx = np.argmax(filtered_mags)
+        highest_freq = float(filtered_freqs[max_idx])
+        highest_mag = float(filtered_mags[max_idx])
+        
+        return [
+            {
+                "index": int(filtered_indices[max_idx]),
+                "freq_khz": highest_freq,
+                "mag_db": highest_mag
+            }
+        ], highest_freq, highest_mag
+    
+    # Sort peaks by magnitude (highest first)
+    peak_idx_sorted = sorted(
+        peak_idx,
+        key=lambda i: filtered_mags[i],
+        reverse=True
+    )[:n_extrema]
+    
+    # Build peak list
+    peaks = [
+        {
+            "index": int(filtered_indices[i]),
+            "freq_khz": float(filtered_freqs[i]),
+            "mag_db": float(filtered_mags[i])
+        }
+        for i in peak_idx_sorted
+    ]
+    
+    # Get highest peak
+    highest_peak = peaks[0] if peaks else {"freq_khz": 0.0, "mag_db": 0.0}
+    highest_freq = highest_peak["freq_khz"]
+    highest_mag = highest_peak["mag_db"]
+    
+    return peaks, highest_freq, highest_mag
+
 # --- Statistical Analysis Functions ---
 
 def compute_basic_stats(arr: NDArray) -> Dict[str, float]:
@@ -311,6 +399,15 @@ def compute_fft_analysis(
         distance_bins=distance_bins
     )
     peak_freq, peak_mag = find_peak_metrics(freqs_khz, mags_db)
+    
+    # Find target peaks above 10 MHz threshold
+    target_peaks, target_freq, target_mag = find_target_extrema(
+        freqs_khz, mags_db,
+        freq_threshold_khz=10_000.0,
+        n_extrema=n_extrema,
+        prominence_db=prominence_db,
+        distance_bins=distance_bins
+    )
 
     return {
         "frequencies": np.ascontiguousarray(freqs_khz, dtype=np.float64),
@@ -326,6 +423,10 @@ def compute_fft_analysis(
         ),
         "max_freq": float(peak_freq),
         "max_mag": float(peak_mag),
+        # Target detection (>10 MHz)
+        "target_peaks": target_peaks,
+        "target_freq": float(target_freq),
+        "target_mag": float(target_mag),
     }
 
 def generate_time_axis_s(

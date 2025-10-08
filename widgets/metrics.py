@@ -47,6 +47,32 @@ def create_metrics_widget(
                 dpg.add_text("CH2 (Even)")
                 dpg.add_text("N/A", tag="ch2_peak_freq")
                 dpg.add_text("N/A", tag="ch2_peak_mag")
+        
+        # Target Detection table (>10 MHz)
+        dpg.add_spacer(height=6)
+        dpg.add_text("Target Detection (>10 MHz)", color=(255, 200, 0))
+        with dpg.table(
+            header_row=True,
+            borders_innerH=True,
+            borders_outerH=True,
+            borders_innerV=True,
+            borders_outerV=True
+        ):
+            dpg.add_table_column(label="Channel")
+            dpg.add_table_column(label="Target Freq (MHz)")
+            dpg.add_table_column(label="Target Mag (dB)")
+
+            # Channel 1 target
+            with dpg.table_row():
+                dpg.add_text("CH1")
+                dpg.add_text("N/A", tag="ch1_target_freq")
+                dpg.add_text("N/A", tag="ch1_target_mag")
+
+            # Channel 2 target
+            with dpg.table_row():
+                dpg.add_text("CH2")
+                dpg.add_text("N/A", tag="ch2_target_freq")
+                dpg.add_text("N/A", tag="ch2_target_mag")
 
         # Channel 1 extrema table
         dpg.add_spacer(height=6)

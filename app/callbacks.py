@@ -87,6 +87,10 @@ def update_ui_from_queues(queues: Dict[str, queue.Queue]) -> None:
             metrics = fft_data.get("metrics", {})
             _update_channel_metrics("ch1", metrics.get('ch1', {}))
             _update_channel_metrics("ch2", metrics.get('ch2', {}))
+            
+            # Update target detection (>10 MHz)
+            _update_target_detection("ch1", metrics.get('ch1', {}))
+            _update_target_detection("ch2", metrics.get('ch2', {}))
 
             # Update peaks & valleys tables
             ch1 = metrics.get('ch1', {})
@@ -133,6 +137,33 @@ def _update_channel_metrics(channel_prefix: str, metrics: Dict[str, Any]) -> Non
         dpg.set_value(freq_tag, f"{metrics.get('peak_freq', 0.0):.2f}")
     if dpg.does_item_exist(mag_tag):
         dpg.set_value(mag_tag, f"{metrics.get('peak_mag', 0.0):.2f}")
+
+
+def _update_target_detection(channel_prefix: str, metrics: Dict[str, Any]) -> None:
+    """Update target detection display (>10 MHz).
+    
+    Args:
+        channel_prefix: Channel identifier (e.g., 'ch1', 'ch2')
+        metrics: Dictionary containing target frequency and magnitude
+    """
+    freq_tag = f"{channel_prefix}_target_freq"
+    mag_tag = f"{channel_prefix}_target_mag"
+    
+    target_freq = metrics.get('target_freq', 0.0)
+    target_mag = metrics.get('target_mag', 0.0)
+    
+    if dpg.does_item_exist(freq_tag):
+        if target_freq > 0:
+            # Convert kHz to MHz for display
+            dpg.set_value(freq_tag, f"{target_freq / 1000.0:.3f}")
+        else:
+            dpg.set_value(freq_tag, "N/A")
+            
+    if dpg.does_item_exist(mag_tag):
+        if target_freq > 0:
+            dpg.set_value(mag_tag, f"{target_mag:.2f}")
+        else:
+            dpg.set_value(mag_tag, "N/A")
 
 
 def _update_extrema_table(
