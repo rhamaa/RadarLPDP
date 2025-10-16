@@ -97,6 +97,10 @@ def update_ui_from_queues(queues: Dict[str, queue.Queue]) -> None:
             ch2 = metrics.get('ch2', {})
             _update_extrema_table('ch1', ch1.get('peaks', []), ch1.get('valleys', []))
             _update_extrema_table('ch2', ch2.get('peaks', []), ch2.get('valleys', []))
+            
+            # Update filtered peaks & valleys tables (index > 2000)
+            _update_extrema_table('ch1_filtered', ch1.get('filtered_peaks', []), ch1.get('filtered_valleys', []))
+            _update_extrema_table('ch2_filtered', ch2.get('filtered_peaks', []), ch2.get('filtered_valleys', []))
     except queue.Empty:
         pass
 

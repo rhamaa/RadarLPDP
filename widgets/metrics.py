@@ -83,6 +83,15 @@ def create_metrics_widget(
         dpg.add_spacer(height=6)
         dpg.add_text("Top Peaks & Valleys (CH2)")
         _create_extrema_table("ch2", num_rows=5)
+        
+        # Filtered extrema table (Index > 2000)
+        dpg.add_spacer(height=6)
+        dpg.add_text("Filtered Peaks & Valleys (Index > 2000) - CH1", color=(100, 200, 255))
+        _create_extrema_table("ch1_filtered", num_rows=5)
+        
+        dpg.add_spacer(height=6)
+        dpg.add_text("Filtered Peaks & Valleys (Index > 2000) - CH2", color=(100, 200, 255))
+        _create_extrema_table("ch2_filtered", num_rows=5)
 
 
 def _create_extrema_table(channel_prefix: str, num_rows: int = 5) -> None:

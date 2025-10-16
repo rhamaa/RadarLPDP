@@ -332,6 +332,98 @@ def find_target_extrema(
     
     return peaks, highest_freq, highest_mag
 
+
+def find_filtered_extrema(
+    frequencies: NDArray[np.float64],
+    magnitudes: NDArray[np.float64],
+    index_threshold: int = 2000,
+    n_extrema: int = 3,
+    prominence_db: float = 3.0,
+    distance_bins: int = 1
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Find top peaks and valleys with FFT bin index above threshold.
+    
+    This function filters the spectrum to only consider FFT bins with
+    index > index_threshold (default: 2000) to analyze higher frequency
+    components of the signal.
+    
+    Args:
+        frequencies: Frequency array in kHz from compute_fft
+        magnitudes: Magnitude array in dB from compute_fft
+        index_threshold: Minimum FFT bin index to consider (default: 2000)
+        n_extrema: Number of top peaks/valleys to extract
+        prominence_db: Prominence threshold for peak detection in dB
+        distance_bins: Minimum distance between peaks in FFT bins
+        
+    Returns:
+        Tuple of (peaks, valleys) where each is a list of dicts with
+        keys: 'index', 'freq_khz', 'mag_db'
+    """
+    if len(magnitudes) == 0:
+        return [], []
+    
+    # Filter by index threshold
+    if index_threshold >= len(magnitudes):
+        # Threshold too high, no data available
+        return [], []
+    
+    # Get filtered data starting from index_threshold
+    filtered_freqs = frequencies[index_threshold:]
+    filtered_mags = magnitudes[index_threshold:]
+    
+    if len(filtered_mags) == 0:
+        return [], []
+    
+    # Find peaks in filtered spectrum
+    peak_idx, _ = find_peaks(
+        filtered_mags,
+        prominence=prominence_db,
+        distance=distance_bins
+    )
+    
+    # Sort peaks by magnitude (highest first)
+    peak_idx_sorted = sorted(
+        peak_idx,
+        key=lambda i: filtered_mags[i],
+        reverse=True
+    )[:n_extrema]
+    
+    # Build peak list with original indices
+    peaks = [
+        {
+            "index": int(i + index_threshold),
+            "freq_khz": float(filtered_freqs[i]),
+            "mag_db": float(filtered_mags[i])
+        }
+        for i in peak_idx_sorted
+    ]
+    
+    # Find valleys by inverting the signal
+    inv_magnitudes = -filtered_mags
+    valley_idx, _ = find_peaks(
+        inv_magnitudes,
+        prominence=prominence_db,
+        distance=distance_bins
+    )
+    
+    # Sort valleys by depth (lowest magnitude first)
+    valley_idx_sorted = sorted(
+        valley_idx,
+        key=lambda i: filtered_mags[i]
+    )[:n_extrema]
+    
+    # Build valley list with original indices
+    valleys = [
+        {
+            "index": int(i + index_threshold),
+            "freq_khz": float(filtered_freqs[i]),
+            "mag_db": float(filtered_mags[i])
+        }
+        for i in valley_idx_sorted
+    ]
+    
+    return peaks, valleys
+
 # --- Statistical Analysis Functions ---
 
 def compute_basic_stats(arr: NDArray) -> Dict[str, float]:
@@ -408,6 +500,15 @@ def compute_fft_analysis(
         prominence_db=prominence_db,
         distance_bins=distance_bins
     )
+    
+    # Find filtered peaks and valleys (index > 2000)
+    filtered_peaks, filtered_valleys = find_filtered_extrema(
+        freqs_khz, mags_db,
+        index_threshold=2000,
+        n_extrema=n_extrema,
+        prominence_db=prominence_db,
+        distance_bins=distance_bins
+    )
 
     return {
         "frequencies": np.ascontiguousarray(freqs_khz, dtype=np.float64),
@@ -427,6 +528,9 @@ def compute_fft_analysis(
         "target_peaks": target_peaks,
         "target_freq": float(target_freq),
         "target_mag": float(target_mag),
+        # Filtered extrema (index > 2000)
+        "filtered_peaks": filtered_peaks,
+        "filtered_valleys": filtered_valleys,
     }
 
 def generate_time_axis_s(
@@ -564,6 +668,22 @@ def process_channel_data(
         prominence_db=3.0,
         distance_bins=1
     )
+    
+    # Extract filtered peaks and valleys (index > 2000)
+    ch1_filtered_peaks, ch1_filtered_valleys = find_filtered_extrema(
+        freqs_ch1, mag_ch1,
+        index_threshold=2000,
+        n_extrema=5,
+        prominence_db=3.0,
+        distance_bins=1
+    )
+    ch2_filtered_peaks, ch2_filtered_valleys = find_filtered_extrema(
+        freqs_ch2, mag_ch2,
+        index_threshold=2000,
+        n_extrema=5,
+        prominence_db=3.0,
+        distance_bins=1
+    )
 
     fft_result = {
         "status": "done",
@@ -578,13 +698,17 @@ def process_channel_data(
                 "peak_freq": peak_freq_ch1,
                 "peak_mag": peak_mag_ch1,
                 "peaks": ch1_peaks,
-                "valleys": ch1_valleys
+                "valleys": ch1_valleys,
+                "filtered_peaks": ch1_filtered_peaks,
+                "filtered_valleys": ch1_filtered_valleys
             },
             "ch2": {
                 "peak_freq": peak_freq_ch2,
                 "peak_mag": peak_mag_ch2,
                 "peaks": ch2_peaks,
-                "valleys": ch2_valleys
+                "valleys": ch2_valleys,
+                "filtered_peaks": ch2_filtered_peaks,
+                "filtered_valleys": ch2_filtered_valleys
             }
         }
     }
