@@ -52,6 +52,13 @@ BUFFER_SAMPLES: int = 8192
 NUM_CHANNELS: int = 2
 """Number of ADC channels (CH1 and CH3)."""
 
+# FFT Processing Configuration
+FFT_SMOOTHING_ENABLED: bool = True
+"""Enable FFT spectrum smoothing to reduce noise."""
+
+FFT_SMOOTHING_WINDOW: int = 11
+"""Smoothing window size (higher = smoother but less detail). Recommended: 5-15."""
+
 # Worker Configuration
 POLLING_INTERVAL: float = 0.5
 """File polling interval in seconds (deprecated, kept for compatibility)."""

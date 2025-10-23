@@ -29,6 +29,8 @@ from config import (
     RADAR_MAX_RANGE,
     RADAR_SWEEP_ANGLE_MIN,
     RADAR_SWEEP_ANGLE_MAX,
+    FFT_SMOOTHING_ENABLED,
+    FFT_SMOOTHING_WINDOW,
 )
 
 # --- Coordinate Conversion Functions ---
@@ -110,10 +112,35 @@ def load_and_process_data(
 
 # --- FFT and Spectral Analysis Functions ---
 
+def smooth_spectrum(
+    magnitudes: NDArray[np.float64],
+    window_size: int = 5
+) -> NDArray[np.float64]:
+    """Apply moving average smoothing to reduce noise in spectrum.
+    
+    Args:
+        magnitudes: Magnitude array to smooth
+        window_size: Size of moving average window (default: 5)
+        
+    Returns:
+        Smoothed magnitude array
+    """
+    if len(magnitudes) < window_size:
+        return magnitudes
+    
+    # Use numpy convolve for moving average
+    kernel = np.ones(window_size) / window_size
+    smoothed = np.convolve(magnitudes, kernel, mode='same')
+    
+    return smoothed
+
+
 def compute_fft(
     channel: NDArray[np.float32],
     sample_rate: int,
-    window: str = "hann"
+    window: str = "hann",
+    smooth: bool = True,
+    smooth_window: int = 5
 ) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
     """Compute FFT spectrum and convert magnitude to dB.
     
@@ -121,6 +148,8 @@ def compute_fft(
         channel: Input signal data
         sample_rate: Sample rate in Hz
         window: Window function name (default: 'hann')
+        smooth: Apply smoothing to reduce noise (default: True)
+        smooth_window: Smoothing window size (default: 5)
         
     Returns:
         Tuple of (frequencies_khz, magnitudes_db)
@@ -145,6 +174,10 @@ def compute_fft(
 
     # Convert to dB scale, avoiding log(0)
     magnitudes_db = 20.0 * np.log10(magnitudes + 1e-12)
+    
+    # Apply smoothing to reduce noise spikes
+    if smooth and smooth_window > 1:
+        magnitudes_db = smooth_spectrum(magnitudes_db, smooth_window)
 
     # Frequencies in kHz
     frequencies_khz = rfftfreq(n, d=1.0 / sample_rate) / 1000.0
@@ -650,8 +683,17 @@ def process_channel_data(
     if ch1_data is None or n_samples <= 0:
         return None, None
 
-    freqs_ch1, mag_ch1 = compute_fft(ch1_data, sample_rate)
-    freqs_ch2, mag_ch2 = compute_fft(ch2_data, sample_rate)
+    # Compute FFT with smoothing configuration
+    freqs_ch1, mag_ch1 = compute_fft(
+        ch1_data, sample_rate,
+        smooth=FFT_SMOOTHING_ENABLED,
+        smooth_window=FFT_SMOOTHING_WINDOW
+    )
+    freqs_ch2, mag_ch2 = compute_fft(
+        ch2_data, sample_rate,
+        smooth=FFT_SMOOTHING_ENABLED,
+        smooth_window=FFT_SMOOTHING_WINDOW
+    )
     peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
     peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
 
