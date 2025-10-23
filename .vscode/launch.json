@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "c:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru",
-      "program": "c:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/build/Debug/outDebug",
+      "cwd": "c:/Users/gsr-baseband/Documents/RadarLPDP/.vscode",
+      "program": "c:/Users/gsr-baseband/Documents/RadarLPDP/.vscode/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [

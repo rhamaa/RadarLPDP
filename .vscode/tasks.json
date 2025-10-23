@@ -34,15 +34,10 @@
       {
         "label": "Build cadgetdata",
         "type": "shell",
-        "command": "gcc",
+        "command": "powershell.exe",
         "args": [
-          "-o",
-          "build/Debug/cadgetdata.exe",
-          "cadgetdata.c",
-          "incl/kiss_fft.c",
-          "-I", "C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/incl",
-          "-L", "C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/lib",
-          "-lWD-Dask"
+          "-Command",
+          "if (-not (Test-Path build\\Debug)) { New-Item -ItemType Directory -Path build\\Debug -Force | Out-Null }; gcc -o build/Debug/cadgetdata.exe cadgetdata.c CodeTriggerExtBaru/incl/kiss_fft.c -I C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/incl -L C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/lib -lWD-Dask"
         ],
         "group": {
           "kind": "build",
