@@ -4,7 +4,7 @@
       "name": "windows-gcc-x86",
       "includePath": [
         "${workspaceFolder}/**",
-        "C:/Users/gsr-baseband/Documents/DevRehan/CodeTriggerExtBaru/incl"
+        "C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/incl"
       ],
       "compilerPath": "C:/MinGW/bin/gcc.exe",
       "cStandard": "${default}",

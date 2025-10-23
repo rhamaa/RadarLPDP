@@ -37,11 +37,11 @@
         "command": "gcc",
         "args": [
           "-o",
-          "build/Debug/cadgetdata1.exe",
+          "build/Debug/cadgetdata.exe",
           "cadgetdata.c",
           "incl/kiss_fft.c",
-          "-I", "C:/Users/gsr-baseband/Documents/DevRehan/CodeTriggerExtBaru/incl",
-          "-L", "C:/Users/gsr-baseband/Documents/DevRehan/CodeTriggerExtBaru/lib",
+          "-I", "C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/incl",
+          "-L", "C:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/lib",
           "-lWD-Dask"
         ],
         "group": {

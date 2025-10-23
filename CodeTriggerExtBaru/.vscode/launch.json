@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
-      "cwd": "C:/Users/gsr-baseband/Documents/DevRehan/CodeTriggerExtBaru/build/Debug",
-      "program": "C:/Users/gsr-baseband/Documents/DevRehan/CodeTriggerExtBaru/build/Debug/outDebug.exe",
+      "cwd": "c:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru",
+      "program": "c:/Users/gsr-baseband/Documents/RadarLPDP/CodeTriggerExtBaru/build/Debug/outDebug",
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
