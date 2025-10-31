@@ -66,6 +66,16 @@ POLLING_INTERVAL: float = 0.5
 WORKER_REFRESH_INTERVAL: float = 0.05
 """UI refresh interval in seconds (~20 FPS)."""
 
+# Target Detection Configuration
+TARGET_HISTORY_MAX_SIZE: int = 50
+"""Maximum number of targets to keep in history."""
+
+TARGET_FREQ_THRESHOLD_KHZ: float = 10_000.0
+"""Frequency threshold for target detection in kHz (10 MHz)."""
+
+FILTERED_EXTREMA_INDEX_THRESHOLD: int = 2000
+"""FFT bin index threshold for filtered extrema analysis."""
+
 # --- Serial Port Configuration ---
 
 SERIAL_PORT: str = '/dev/ttyUSB0'

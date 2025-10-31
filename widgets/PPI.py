@@ -1,12 +1,15 @@
-# widgets/PPI.py
+"""PPI (Plan Position Indicator) widget for radar display.
+
+This module provides the radar PPI display with sweep line and target plotting.
+"""
+
+import math
 
 import dearpygui.dearpygui as dpg
 import numpy as np
-import math
 
-# Impor dari file lokal
+from config import RADAR_MAX_RANGE, THEME_COLORS
 from functions.data_processing import polar_to_cartesian
-from config import THEME_COLORS
 
 # --- Helper Khusus UI --- #
 
@@ -26,7 +29,7 @@ def create_ppi_widget(parent, width, height):
     with dpg.child_window(parent=parent, width=width, height=height, no_scrollbar=True):
         dpg.add_text("Plan Position Indicator (PPI) - Jarak (km)")
         
-        axis_limit = 15
+        axis_limit = int(RADAR_MAX_RANGE)
         
         with dpg.plot(label="PPI Display", width=-1, height=-1, equal_aspects=True):
             dpg.add_plot_legend()
@@ -55,8 +58,8 @@ def update_sweep_line(angle):
     """Hanya memperbarui posisi garis sapuan."""
     if dpg.does_item_exist("ppi_sweep_line"):
         angle_rad = np.deg2rad(angle)
-        x_end = 15 * np.cos(angle_rad)
-        y_end = 15 * np.sin(angle_rad)
+        x_end = RADAR_MAX_RANGE * np.cos(angle_rad)
+        y_end = RADAR_MAX_RANGE * np.sin(angle_rad)
         dpg.set_value("ppi_sweep_line", ([0, x_end], [0, y_end]))
 
 def add_target_to_plot(targets):

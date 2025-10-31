@@ -6,18 +6,24 @@ data from worker threads, handling window resize events, and cleanup operations.
 
 import queue
 import time
-from typing import Dict, List, Tuple, Any
+from collections import deque
+from typing import Any, Dict, List, Tuple
 
 import dearpygui.dearpygui as dpg
 import numpy as np
 
 from app.external_process import stop_worker
-from config import APP_SPACING, APP_PADDING, THEME_COLORS
+from config import (
+    APP_SPACING,
+    APP_PADDING,
+    THEME_COLORS,
+    TARGET_HISTORY_MAX_SIZE,
+)
 from widgets.PPI import update_sweep_line, add_target_to_plot
 
 # Global UI state
 last_known_angle: float = 0.0
-target_history: List[Tuple[float, float]] = []
+target_history: deque = deque(maxlen=TARGET_HISTORY_MAX_SIZE)
 
 def update_ui_from_queues(queues: Dict[str, queue.Queue]) -> None:
     """Check all queues and update UI with new data.
@@ -40,13 +46,9 @@ def update_ui_from_queues(queues: Dict[str, queue.Queue]) -> None:
             # Message from fft_data_worker: add new target at last known angle
             distance = ppi_data['distance']
             new_target = (last_known_angle, distance)
-            target_history.append(new_target)
+            target_history.append(new_target)  # deque auto-removes oldest
             
-            # Limit history to prevent memory growth
-            if len(target_history) > 50:
-                target_history.pop(0)
-            
-            add_target_to_plot(target_history)
+            add_target_to_plot(list(target_history))
     except queue.Empty:
         pass
 
