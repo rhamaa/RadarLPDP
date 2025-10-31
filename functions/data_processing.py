@@ -10,14 +10,14 @@ import queue
 import struct
 import threading
 import time
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import serial
 from numpy.typing import NDArray
 from scipy import stats as sp_stats
 from scipy.fft import rfft, rfftfreq
-from scipy.signal import find_peaks, get_window
+from scipy.signal import find_peaks, get_window, savgol_filter
 
 from config import (
     FILENAME,
@@ -30,7 +30,11 @@ from config import (
     RADAR_SWEEP_ANGLE_MIN,
     RADAR_SWEEP_ANGLE_MAX,
     FFT_SMOOTHING_ENABLED,
+    FFT_SMOOTHING_METHOD,
     FFT_SMOOTHING_WINDOW,
+    FFT_SAVGOL_WINDOW,
+    FFT_SAVGOL_POLYORDER,
+    FFT_MAGNITUDE_FLOOR_DB,
     TARGET_FREQ_THRESHOLD_KHZ,
     FILTERED_EXTREMA_INDEX_THRESHOLD,
 )
@@ -116,24 +120,61 @@ def load_and_process_data(
 
 def smooth_spectrum(
     magnitudes: NDArray[np.float64],
-    window_size: int = 5
+    window_size: int = 5,
+    method: str = "moving_average",
+    savgol_window: int = 51,
+    savgol_polyorder: int = 3
 ) -> NDArray[np.float64]:
-    """Apply moving average smoothing to reduce noise in spectrum.
+    """Apply smoothing filter to reduce noise grass in spectrum.
     
     Args:
         magnitudes: Magnitude array to smooth
-        window_size: Size of moving average window (default: 5)
+        window_size: Moving average window size
+        method: Smoothing method ('moving_average' or 'savgol')
+        savgol_window: Window length for Savitzky-Golay filter (must be odd)
+        savgol_polyorder: Polynomial order for Savitzky-Golay filter
         
     Returns:
         Smoothed magnitude array
     """
-    if len(magnitudes) < window_size:
+    n = len(magnitudes)
+    if n == 0:
         return magnitudes
-    
-    # Use numpy convolve for moving average
-    kernel = np.ones(window_size) / window_size
-    smoothed = np.convolve(magnitudes, kernel, mode='same')
-    
+
+    method = (method or "moving_average").lower()
+
+    if method == "savgol":
+        if n < 3:
+            return magnitudes
+
+        window = min(savgol_window, n)
+        if window % 2 == 0:
+            window -= 1
+
+        min_window = max(savgol_polyorder + 1, 3)
+        if min_window % 2 == 0:
+            min_window += 1
+
+        if window < min_window:
+            window = min_window
+
+        if window > n:
+            window = n if n % 2 == 1 else n - 1
+
+        if window < 3 or window <= savgol_polyorder:
+            return magnitudes
+
+        try:
+            return savgol_filter(magnitudes, window_length=window, polyorder=savgol_polyorder)
+        except ValueError:
+            # Fallback to moving average if parameters invalid
+            pass
+
+    if window_size <= 1 or n < window_size:
+        return magnitudes
+
+    kernel = np.ones(window_size, dtype=np.float64) / window_size
+    smoothed = np.convolve(magnitudes, kernel, mode="same")
     return smoothed
 
 
@@ -178,8 +219,17 @@ def compute_fft(
     magnitudes_db = 20.0 * np.log10(magnitudes + 1e-12)
     
     # Apply smoothing to reduce noise spikes
-    if smooth and smooth_window > 1:
-        magnitudes_db = smooth_spectrum(magnitudes_db, smooth_window)
+    if smooth:
+        magnitudes_db = smooth_spectrum(
+            magnitudes_db,
+            window_size=smooth_window,
+            method=FFT_SMOOTHING_METHOD,
+            savgol_window=FFT_SAVGOL_WINDOW,
+            savgol_polyorder=FFT_SAVGOL_POLYORDER,
+        )
+
+    if FFT_MAGNITUDE_FLOOR_DB is not None:
+        magnitudes_db = np.maximum(magnitudes_db, FFT_MAGNITUDE_FLOOR_DB)
 
     # Frequencies in kHz
     frequencies_khz = rfftfreq(n, d=1.0 / sample_rate) / 1000.0

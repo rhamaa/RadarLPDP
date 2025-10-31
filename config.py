@@ -57,7 +57,19 @@ FFT_SMOOTHING_ENABLED: bool = True
 """Enable FFT spectrum smoothing to reduce noise."""
 
 FFT_SMOOTHING_WINDOW: int = 11
-"""Smoothing window size (higher = smoother but less detail). Recommended: 5-15."""
+"""Moving average smoothing window (fallback for other methods)."""
+
+FFT_SMOOTHING_METHOD: str = "savgol"
+"""Smoothing method to apply ('moving_average' or 'savgol')."""
+
+FFT_SAVGOL_WINDOW: int = 51
+"""Savitzky-Golay window length (must be odd)."""
+
+FFT_SAVGOL_POLYORDER: int = 3
+"""Savitzky-Golay polynomial order."""
+
+FFT_MAGNITUDE_FLOOR_DB: float = -105.0
+"""Clamp FFT magnitude to this floor to suppress noise grass (dB)."""
 
 # Worker Configuration
 POLLING_INTERVAL: float = 0.5
