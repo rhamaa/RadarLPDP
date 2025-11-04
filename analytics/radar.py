@@ -6,6 +6,7 @@ Interactive panel untuk analisis sample data radar dengan toggle buttons
 
 import sys
 from pathlib import Path
+import hashlib
 
 # Add parent directory to path
 parent_dir = Path(__file__).parent.parent
@@ -18,7 +19,7 @@ from config import SAMPLE_RATE, FFT_SMOOTHING_ENABLED, FFT_SMOOTHING_WINDOW
 
 # Configuration
 SAMPLE_DIR = Path(__file__).parent / "sample"
-AVAILABLE_FILES = sorted(list(SAMPLE_DIR.glob("*.bin")))
+AVAILABLE_FILES = sorted(list(SAMPLE_DIR.glob("**/*.bin")))
 
 # Color palette untuk setiap sample
 SAMPLE_COLORS = [
@@ -39,6 +40,8 @@ class AnalyticsState:
         self.next_color_index = 0
         self.enable_nulling = True  # Enable data nulling below 10th peak
         self.nulling_threshold_rank = 10  # Null data below this peak rank
+        self.sample_filter = ""
+        self.suppress_checkbox_callback = False
     
     def toggle_sample(self, filename):
         """Toggle visibility sample"""
@@ -53,10 +56,11 @@ class AnalyticsState:
     
     def load_sample(self, filename):
         """Load dan process sample file"""
-        filepath = SAMPLE_DIR / filename
+        # Handle both relative path (from subfolder) and direct filename
+        filepath = SAMPLE_DIR / filename if not Path(filename).is_absolute() else Path(filename)
         
         if not filepath.exists():
-            print(f"❌ File not found: {filename}")
+            print(f"❌ File not found: {filepath}")
             return
         
         print(f"📂 Loading: {filename}")
@@ -129,22 +133,6 @@ class AnalyticsState:
 
 state = AnalyticsState()
 
-# Callbacks
-def toggle_button_callback(sender, app_data, user_data):
-    """Callback untuk toggle button sample"""
-    filename = user_data
-    
-    # Toggle sample
-    is_active = state.toggle_sample(filename)
-    
-    # Update button appearance
-    if is_active:
-        dpg.configure_item(sender, label=f"✓ {filename}")
-    else:
-        dpg.configure_item(sender, label=f"  {filename}")
-    
-    # Update plots
-    update_all_plots()
 
 def update_all_plots():
     """Update semua plot dengan data aktif"""
@@ -270,12 +258,124 @@ def clear_all_callback():
     state.active_samples.clear()
     state.next_color_index = 0
     
-    # Reset all buttons
-    for f in AVAILABLE_FILES:
-        button_tag = f"btn_{f.name}"
-        if dpg.does_item_exist(button_tag):
-            dpg.configure_item(button_tag, label=f"  {f.name}")
+    state.suppress_checkbox_callback = True
+    try:
+        for f in AVAILABLE_FILES:
+            rel_path = str(f.relative_to(SAMPLE_DIR)).replace("\\", "/")
+            tag = f"sample_chk_{hashlib.md5(rel_path.encode()).hexdigest()}"
+            if dpg.does_item_exist(tag):
+                dpg.set_value(tag, False)
+    finally:
+        state.suppress_checkbox_callback = False
     
+    update_all_plots()
+
+def update_layout_split():
+    """Update layout split ratio berdasarkan slider value"""
+    if not dpg.does_item_exist("layout_slider"):
+        return
+    
+    split_percent = dpg.get_value("layout_slider")
+    
+    # Get viewport size
+    viewport_width = dpg.get_viewport_client_width()
+    
+    # Calculate widths (accounting for padding and separator)
+    available_width = max(viewport_width - 60, 400)
+    left_width = int(available_width * split_percent / 100)
+    right_width = available_width - left_width
+    
+    # Update column widths
+    if dpg.does_item_exist("left_column"):
+        dpg.configure_item("left_column", width=left_width, height=-1)
+    if dpg.does_item_exist("right_column"):
+        dpg.configure_item("right_column", width=right_width, height=-1)
+
+
+def layout_slider_callback(sender, app_data, user_data):
+    update_layout_split()
+
+
+def viewport_resize_callback(sender, app_data):
+    update_layout_split()
+
+
+def _build_filtered_tree(filter_text):
+    """Bangun struktur tree dari sample files sesuai filter"""
+    tree = {}
+    normalized_filter = filter_text.lower()
+    for file_path in AVAILABLE_FILES:
+        rel_parts = file_path.relative_to(SAMPLE_DIR).parts
+        rel_str = "/".join(rel_parts)
+        if normalized_filter and normalized_filter not in rel_str.lower():
+            continue
+        node = tree
+        for part in rel_parts[:-1]:
+            node = node.setdefault(part, {})
+        node.setdefault("__files__", []).append(rel_str)
+    return tree
+
+
+def _render_sample_tree(tree, parent, depth=0):
+    """Render tree node secara recursive"""
+    directories = sorted(k for k in tree.keys() if k != "__files__")
+    for directory in directories:
+        node_id = dpg.add_tree_node(
+            label=directory,
+            parent=parent,
+            default_open=(depth == 0),
+        )
+        _render_sample_tree(tree[directory], node_id, depth + 1)
+    file_entries = sorted(tree.get("__files__", []))
+    for rel_path in file_entries:
+        checkbox_tag = f"sample_chk_{hashlib.md5(rel_path.encode()).hexdigest()}"
+        is_active = rel_path in state.active_samples
+        checkbox_id = dpg.add_checkbox(
+            label=rel_path.split("/")[-1],
+            parent=parent,
+            default_value=is_active,
+            callback=sample_checkbox_callback,
+            user_data=rel_path,
+            tag=checkbox_tag,
+        )
+        with dpg.tooltip(checkbox_id):
+            dpg.add_text(rel_path)
+
+
+def update_file_tree_ui():
+    """Refresh tampilan tree sample sesuai filter"""
+    if not dpg.does_item_exist("sample_tree_container"):
+        return
+    dpg.delete_item("sample_tree_container", children_only=True)
+    tree = _build_filtered_tree(state.sample_filter)
+    if not tree:
+        dpg.add_text("No samples found", parent="sample_tree_container", color=(200, 100, 100))
+        return
+    _render_sample_tree(tree, "sample_tree_container")
+
+
+def sample_search_callback(sender, app_data, user_data):
+    state.sample_filter = app_data.strip()
+    update_file_tree_ui()
+
+
+def clear_filter_callback():
+    state.sample_filter = ""
+    if dpg.does_item_exist("sample_search_input"):
+        dpg.set_value("sample_search_input", "")
+    update_file_tree_ui()
+
+
+def sample_checkbox_callback(sender, app_data, user_data):
+    rel_path = user_data
+    if state.suppress_checkbox_callback:
+        return
+    if app_data:
+        if rel_path not in state.active_samples:
+            state.load_sample(rel_path)
+    else:
+        if rel_path in state.active_samples:
+            del state.active_samples[rel_path]
     update_all_plots()
 
 # Main UI
@@ -298,68 +398,68 @@ def create_analytics_panel():
     
     dpg.bind_theme(global_theme)
     
-    # Main window
-    with dpg.window(label="Radar LPDP Analytics", tag="main_window", width=1600, height=950):
+    # Main window - Fullscreen
+    with dpg.window(label="Radar LPDP Analytics", tag="main_window", no_close=False):
         
         dpg.add_text("📊 Radar Sample Comparison Tool", color=(100, 200, 255))
-        dpg.add_text("Click buttons to toggle samples (multiple selection allowed)", color=(150, 150, 150))
+        dpg.add_text("Use the sample explorer to enable/disable files for comparison", color=(150, 150, 150))
         dpg.add_separator()
         
-        # Top bar - Sample toggle buttons
-        with dpg.group(horizontal=True):
-            dpg.add_text("📁 Samples:", color=(200, 200, 100))
-            
-            for f in AVAILABLE_FILES:
-                dpg.add_button(
-                    label=f"  {f.name}",
-                    callback=toggle_button_callback,
-                    user_data=f.name,
-                    tag=f"btn_{f.name}",
-                    width=120
+        with dpg.collapsing_header(label="📂 Sample Explorer", default_open=True):
+            with dpg.group(horizontal=True):
+                dpg.add_input_text(
+                    label="Search",
+                    tag="sample_search_input",
+                    width=260,
+                    hint="Filter folder / file",
+                    callback=sample_search_callback,
+                    user_data=None,
                 )
-            
-            dpg.add_button(
-                label="🗑️ Clear All",
-                callback=clear_all_callback,
-                width=100
-            )
+                dpg.add_button(label="Reset", width=70, callback=clear_filter_callback)
+                dpg.add_button(label="🗑️ Clear", width=80, callback=clear_all_callback)
+            with dpg.child_window(tag="sample_tree_container", height=170, width=-1, border=True):
+                dpg.add_text("Loading samples...")
         
         dpg.add_separator()
         
-        # Layout: 2 columns
-        with dpg.group(horizontal=True):
+        # Slider untuk mengatur lebar kolom kiri/kanan
+        dpg.add_slider_int(
+            label="Layout Split (%)",
+            default_value=65,
+            min_value=30,
+            max_value=70,
+            tag="layout_slider",
+            width=320,
+            callback=layout_slider_callback
+        )
+        dpg.add_text("← Adjust to resize plot vs table area →", color=(150, 150, 150))
+        
+        dpg.add_separator()
+        
+        # Layout: 2 columns dengan responsive width
+        with dpg.group(horizontal=True, tag="main_layout_group"):
             
             # Left column: FFT Plots
-            with dpg.child_window(width=1050, height=850):
+            with dpg.child_window(tag="left_column", border=False):
                 dpg.add_text("FFT Spectrum Comparison", color=(100, 200, 255))
                 dpg.add_text("Multiple samples can be overlayed for comparison", color=(150, 150, 150))
-                
-                dpg.add_spacer(height=5)
-                
-                # CH1 Plot
+                dpg.add_spacer(height=6)
                 dpg.add_text("Channel 1 (CH1)", color=(255, 150, 100))
-                with dpg.plot(label="CH1 FFT Comparison", height=380, width=-1, tag="ch1_plot"):
+                with dpg.plot(label="CH1 FFT Comparison", height=360, width=-1, tag="ch1_plot"):
                     dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="fft_ch1_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="fft_ch1_yaxis")
-
-                
-                dpg.add_spacer(height=10)
-                
-                # CH2 Plot
+                dpg.add_spacer(height=12)
                 dpg.add_text("Channel 2 (CH2)", color=(255, 200, 100))
-                with dpg.plot(label="CH2 FFT Comparison", height=380, width=-1, tag="ch2_plot"):
+                with dpg.plot(label="CH2 FFT Comparison", height=360, width=-1, tag="ch2_plot"):
                     dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="fft_ch2_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="fft_ch2_yaxis")
             
-            # Right column: Peak Tables & Controls
-            with dpg.child_window(width=500, height=850):
+            # Right column: Peak Tables & Controls (scrollable)
+            with dpg.child_window(tag="right_column", border=False):
                 dpg.add_text("Controls & Peak Analysis", color=(100, 255, 150))
-                
                 dpg.add_spacer(height=5)
-                
-                # Nulling controls
                 with dpg.collapsing_header(label="🔧 Data Nulling (Grass Removal)", default_open=True):
                     dpg.add_text("Remove noise below top N peaks:", color=(200, 200, 200))
                     dpg.add_checkbox(
@@ -373,14 +473,11 @@ def create_analytics_panel():
                         min_value=5,
                         max_value=20,
                         callback=nulling_threshold_callback,
-                        width=200
+                        width=-1
                     )
                     dpg.add_text("💡 Lower value = more aggressive noise removal", color=(150, 150, 150))
-                
                 dpg.add_separator()
                 dpg.add_spacer(height=5)
-                
-                # CH1 Peaks
                 dpg.add_text("CH1 Top Peaks", color=(255, 150, 100))
                 with dpg.table(
                     header_row=True,
@@ -389,18 +486,15 @@ def create_analytics_panel():
                     borders_innerV=True,
                     borders_outerV=True,
                     tag="ch1_peak_table",
-                    height=380,
+                    height=310,
                     scrollY=True
                 ):
-                    dpg.add_table_column(label="Sample", width_fixed=True, init_width_or_weight=100)
+                    dpg.add_table_column(label="Sample", width_fixed=True, init_width_or_weight=80)
                     dpg.add_table_column(label="#", width_fixed=True, init_width_or_weight=30)
-                    dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=60)
-                    dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=80)
-                
-                dpg.add_spacer(height=20)
-                
-                # CH2 Peaks
+                    dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=50)
+                    dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=75)
+                    dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=70)
+                dpg.add_spacer(height=12)
                 dpg.add_text("CH2 Top Peaks", color=(255, 200, 100))
                 with dpg.table(
                     header_row=True,
@@ -409,28 +503,36 @@ def create_analytics_panel():
                     borders_innerV=True,
                     borders_outerV=True,
                     tag="ch2_peak_table",
-                    height=380,
+                    height=310,
                     scrollY=True
                 ):
-                    dpg.add_table_column(label="Sample", width_fixed=True, init_width_or_weight=100)
+                    dpg.add_table_column(label="Sample", width_fixed=True, init_width_or_weight=80)
                     dpg.add_table_column(label="#", width_fixed=True, init_width_or_weight=30)
-                    dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=60)
-                    dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=80)
+                    dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=50)
+                    dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=75)
+                    dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=70)
         
         dpg.add_separator()
-        dpg.add_text("💡 Tip: Click multiple sample buttons to overlay and compare FFT spectra", 
+        dpg.add_text("💡 Tip: Use the search box to quickly locate samples across nested folders", 
                      color=(150, 150, 150))
     
-    # Setup viewport
-    dpg.create_viewport(title="Radar LPDP Analytics - Sample Comparison", width=1620, height=970)
+    # Setup viewport - Fullscreen
+    dpg.create_viewport(title="Radar LPDP Analytics - Sample Comparison", width=1920, height=1080)
     dpg.setup_dearpygui()
+    dpg.set_viewport_resize_callback(viewport_resize_callback)
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
     
+    # Set window to fill viewport
+    dpg.configure_item("main_window", width=-1, height=-1)
+    update_file_tree_ui()
+
     print("✅ Analytics panel created!")
     print(f"📁 Found {len(AVAILABLE_FILES)} sample files")
     print("🚀 Click sample buttons to load and compare data")
+
+    # Initial layout split
+    update_layout_split()
     
     # Render loop
     while dpg.is_dearpygui_running():

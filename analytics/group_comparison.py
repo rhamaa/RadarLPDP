@@ -7,6 +7,7 @@ Analisis persamaan dalam group dan perbedaan antar group
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+import hashlib
 import numpy as np
 import dearpygui.dearpygui as dpg
 from scipy import stats
@@ -47,29 +48,40 @@ class GroupAnalyzer:
         self.selected_groups = set()
         self.enable_nulling = True
         self.nulling_threshold_rank = 10
+        self.group_filter = ""
+        self.suppress_group_checkbox = False
     
     def discover_groups(self):
-        """Discover semua group dari direktori sample"""
+        """Discover semua group dari direktori sample (recursive)"""
         groups = {}
         
-        for group_dir in SAMPLE_DIR.iterdir():
-            if group_dir.is_dir() and not group_dir.name.startswith('.'):
-                bin_files = sorted(list(group_dir.glob("*.bin")))
-                if bin_files:
-                    groups[group_dir.name] = bin_files
-                    print(f"📂 Found group: {group_dir.name} ({len(bin_files)} files)")
+        # Cari semua subfolder yang mengandung .bin files
+        for bin_file in SAMPLE_DIR.glob("**/*.bin"):
+            # Gunakan parent folder sebagai group name
+            group_dir = bin_file.parent
+            group_name = str(group_dir.relative_to(SAMPLE_DIR)).replace("\\", "/")
+            
+            if group_name not in groups:
+                groups[group_name] = []
+            groups[group_name].append(bin_file)
+        
+        # Sort files dalam setiap group
+        for group_name in groups:
+            groups[group_name] = sorted(groups[group_name])
+            print(f"📂 Found group: {group_name} ({len(groups[group_name])} files)")
         
         return groups
     
     def load_group(self, group_name: str):
         """Load semua sample dalam group"""
-        group_dir = SAMPLE_DIR / group_name
+        # Handle path separator untuk cross-platform
+        group_path = SAMPLE_DIR / group_name.replace("/", "\\" if Path("").drive else "/")
         
-        if not group_dir.exists():
+        if not group_path.exists():
             print(f"❌ Group not found: {group_name}")
             return False
         
-        bin_files = sorted(list(group_dir.glob("*.bin")))
+        bin_files = sorted(list(group_path.glob("*.bin")))
         if not bin_files:
             print(f"❌ No .bin files in {group_name}")
             return False
@@ -78,7 +90,8 @@ class GroupAnalyzer:
         self.groups[group_name] = {}
         
         for filepath in bin_files:
-            filename = filepath.name
+            # Gunakan relative path dari SAMPLE_DIR sebagai identifier
+            filename = str(filepath.relative_to(SAMPLE_DIR)).replace("\\", "/")
             
             try:
                 # Load data
@@ -404,13 +417,105 @@ def clear_all_callback():
     """Clear semua selected groups"""
     analyzer.selected_groups.clear()
     
-    # Reset buttons
-    available_groups = analyzer.discover_groups()
-    for group_name in available_groups.keys():
-        button_tag = f"btn_{group_name}"
-        if dpg.does_item_exist(button_tag):
-            dpg.configure_item(button_tag, label=f"  {group_name}")
+    analyzer.suppress_group_checkbox = True
+    try:
+        for rel_path in analyzer.groups.keys():
+            tag = f"group_chk_{hashlib.md5(rel_path.encode()).hexdigest()}"
+            if dpg.does_item_exist(tag):
+                dpg.set_value(tag, False)
+    finally:
+        analyzer.suppress_group_checkbox = False
     
+    update_all_visualizations()
+
+def update_layout_split():
+    """Update layout split ratio berdasarkan slider value"""
+    if not dpg.does_item_exist("layout_slider"):
+        return
+    split_percent = dpg.get_value("layout_slider")
+    viewport_width = dpg.get_viewport_client_width()
+    available_width = max(viewport_width - 60, 400)
+    left_width = int(available_width * split_percent / 100)
+    right_width = available_width - left_width
+    if dpg.does_item_exist("left_column"):
+        dpg.configure_item("left_column", width=left_width, height=-1)
+    if dpg.does_item_exist("right_column"):
+        dpg.configure_item("right_column", width=right_width, height=-1)
+
+def layout_slider_callback(sender, app_data, user_data):
+    update_layout_split()
+
+def viewport_resize_callback(sender, app_data):
+    update_layout_split()
+
+def _build_group_tree(filter_text: str):
+    tree = {}
+    normalized_filter = filter_text.lower()
+    for group_name in analyzer.groups.keys():
+        rel_parts = group_name.split("/") if group_name else []
+        if normalized_filter and normalized_filter not in group_name.lower():
+            continue
+        node = tree
+        for part in rel_parts[:-1]:
+            node = node.setdefault(part, {})
+        leaf_list = node.setdefault("__groups__", [])
+        if group_name not in leaf_list:
+            leaf_list.append(group_name)
+    return tree
+
+def _render_group_tree(tree, parent, depth=0):
+    directories = sorted(k for k in tree.keys() if k != "__groups__")
+    for directory in directories:
+        node_id = dpg.add_tree_node(
+            label=directory,
+            parent=parent,
+            default_open=(depth == 0)
+        )
+        _render_group_tree(tree[directory], node_id, depth + 1)
+    leaf_groups = sorted(tree.get("__groups__", []))
+    for group_name in leaf_groups:
+        tag = f"group_chk_{hashlib.md5(group_name.encode()).hexdigest()}"
+        checkbox_id = dpg.add_checkbox(
+            label=group_name.split("/")[-1],
+            parent=parent,
+            default_value=(group_name in analyzer.selected_groups),
+            callback=group_checkbox_callback,
+            user_data=group_name,
+            tag=tag
+        )
+        with dpg.tooltip(checkbox_id):
+            dpg.add_text(group_name)
+
+def update_group_tree_ui():
+    if not dpg.does_item_exist("group_tree_container"):
+        return
+    dpg.delete_item("group_tree_container", children_only=True)
+    tree = _build_group_tree(analyzer.group_filter)
+    if not tree:
+        dpg.add_text("No groups found", parent="group_tree_container", color=(200, 100, 100))
+        return
+    _render_group_tree(tree, "group_tree_container")
+
+def group_search_callback(sender, app_data, user_data):
+    analyzer.group_filter = app_data.strip()
+    update_group_tree_ui()
+
+def clear_group_filter_callback():
+    analyzer.group_filter = ""
+    if dpg.does_item_exist("group_search_input"):
+        dpg.set_value("group_search_input", "")
+    update_group_tree_ui()
+
+def group_checkbox_callback(sender, app_data, user_data):
+    if analyzer.suppress_group_checkbox:
+        return
+    group_name = user_data
+    if app_data:
+        if analyzer.toggle_group(group_name):
+            analyzer.load_group(group_name)
+    else:
+        if group_name in analyzer.selected_groups:
+            analyzer.selected_groups.remove(group_name)
     update_all_visualizations()
 
 # Main UI
@@ -421,6 +526,7 @@ def create_group_comparison_panel():
     
     # Discover groups
     available_groups = analyzer.discover_groups()
+    analyzer.groups = {name: {} for name in available_groups.keys()}
     
     # Setup theme
     with dpg.theme() as global_theme:
@@ -437,39 +543,48 @@ def create_group_comparison_panel():
     dpg.bind_theme(global_theme)
     
     # Main window
-    with dpg.window(label="Radar LPDP Group Comparison", tag="main_window", width=1600, height=950):
+    with dpg.window(label="Radar LPDP Group Comparison", tag="main_window", no_close=False):
         
         dpg.add_text("📊 Group Comparison Analysis", color=(100, 200, 255))
-        dpg.add_text("Select multiple groups to compare persamaan dalam group dan perbedaan antar group", 
+        dpg.add_text("Use the group explorer to control which groups are compared", 
                      color=(150, 150, 150))
         dpg.add_separator()
         
-        # Top bar - Group toggle buttons
-        with dpg.group(horizontal=True):
-            dpg.add_text("📁 Groups:", color=(200, 200, 100))
-            
-            for group_name in sorted(available_groups.keys()):
-                dpg.add_button(
-                    label=f"  {group_name}",
-                    callback=toggle_group_callback,
-                    user_data=group_name,
-                    tag=f"btn_{group_name}",
-                    width=150
+        with dpg.collapsing_header(label="📁 Group Explorer", default_open=True):
+            with dpg.group(horizontal=True):
+                dpg.add_input_text(
+                    label="Search",
+                    tag="group_search_input",
+                    width=260,
+                    hint="Filter group name",
+                    callback=group_search_callback,
+                    user_data=None
                 )
-            
-            dpg.add_button(
-                label="🗑️ Clear All",
-                callback=clear_all_callback,
-                width=100
-            )
+                dpg.add_button(label="Reset", width=70, callback=clear_group_filter_callback)
+                dpg.add_button(label="🗑️ Clear", width=80, callback=clear_all_callback)
+            with dpg.child_window(tag="group_tree_container", height=170, width=-1, border=True):
+                dpg.add_text("Loading groups...")
+        
+        dpg.add_separator()
+        
+        dpg.add_slider_int(
+            label="Layout Split (%)",
+            default_value=65,
+            min_value=30,
+            max_value=70,
+            tag="layout_slider",
+            width=320,
+            callback=layout_slider_callback
+        )
+        dpg.add_text("← Adjust to resize overlay vs stats area →", color=(150, 150, 150))
         
         dpg.add_separator()
         
         # Layout: 2 columns
-        with dpg.group(horizontal=True):
+        with dpg.group(horizontal=True, tag="main_layout_group"):
             
             # Left column: Overlay Plots
-            with dpg.child_window(width=1050, height=850):
+            with dpg.child_window(tag="left_column", border=False):
                 dpg.add_text("Group Average Comparison", color=(100, 200, 255))
                 dpg.add_text("Overlay rata-rata FFT dari setiap group", color=(150, 150, 150))
                 
@@ -477,7 +592,7 @@ def create_group_comparison_panel():
                 
                 # CH1 Plot
                 dpg.add_text("Channel 1 (CH1)", color=(255, 150, 100))
-                with dpg.plot(label="CH1 Group Overlay", height=380, width=-1, tag="ch1_plot"):
+                with dpg.plot(label="CH1 Group Overlay", height=360, width=-1, tag="ch1_plot"):
                     dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="ch1_overlay_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="ch1_overlay_yaxis")
@@ -486,13 +601,13 @@ def create_group_comparison_panel():
                 
                 # CH2 Plot
                 dpg.add_text("Channel 2 (CH2)", color=(255, 200, 100))
-                with dpg.plot(label="CH2 Group Overlay", height=380, width=-1, tag="ch2_plot"):
+                with dpg.plot(label="CH2 Group Overlay", height=360, width=-1, tag="ch2_plot"):
                     dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="ch2_overlay_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="ch2_overlay_yaxis")
             
             # Right column: Statistics & Comparison
-            with dpg.child_window(width=500, height=850):
+            with dpg.child_window(tag="right_column", border=False):
                 dpg.add_text("Group Statistics & Comparison", color=(100, 255, 150))
                 
                 dpg.add_spacer(height=5)
@@ -506,14 +621,14 @@ def create_group_comparison_panel():
                     borders_innerV=True,
                     borders_outerV=True,
                     tag="stats_table",
-                    height=350,
+                    height=310,
                     scrollY=True
                 ):
                     dpg.add_table_column(label="Group-CH", width_fixed=True, init_width_or_weight=120)
                     dpg.add_table_column(label="Mean Mag", width_fixed=True, init_width_or_weight=90)
                     dpg.add_table_column(label="Std Mag", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="Med Freq", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="N Samples", width_fixed=True, init_width_or_weight=80)
+                    dpg.add_table_column(label="Med Freq", width_fixed=True, init_width_or_weight=75)
+                    dpg.add_table_column(label="N Samples", width_fixed=True, init_width_or_weight=65)
                 
                 dpg.add_spacer(height=10)
                 
@@ -526,35 +641,37 @@ def create_group_comparison_panel():
                     borders_innerV=True,
                     borders_outerV=True,
                     tag="comparison_table",
-                    height=350,
+                    height=310,
                     scrollY=True
                 ):
                     dpg.add_table_column(label="Comparison", width_fixed=True, init_width_or_weight=120)
                     dpg.add_table_column(label="ΔMean Mag", width_fixed=True, init_width_or_weight=90)
                     dpg.add_table_column(label="ΔStd Mag", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="ΔMed Freq", width_fixed=True, init_width_or_weight=90)
+                    dpg.add_table_column(label="ΔMed Freq", width_fixed=True, init_width_or_weight=75)
         
         dpg.add_separator()
         dpg.add_text("💡 Tip: Pilih 2+ groups untuk melihat perbandingan. Setiap group menunjukkan rata-rata dari semua sample dalam group tersebut", 
                      color=(150, 150, 150))
     
     # Setup viewport
-    dpg.create_viewport(title="Radar LPDP Group Comparison", width=1620, height=970)
+    dpg.create_viewport(title="Radar LPDP Group Comparison", width=1920, height=1080)
     dpg.setup_dearpygui()
+    dpg.set_viewport_resize_callback(viewport_resize_callback)
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
+    dpg.configure_item("main_window", width=-1, height=-1)
+    update_group_tree_ui()
+    update_layout_split()
     
     print("✅ Group comparison panel created!")
     print(f"📁 Found {len(available_groups)} groups")
     for group_name, files in available_groups.items():
         print(f"   - {group_name}: {len(files)} files")
-    print("🚀 Click group buttons to load and compare")
+    print("🚀 Use the group explorer to load and compare")
     
     # Render loop
     while dpg.is_dearpygui_running():
         dpg.render_dearpygui_frame()
-    
-    dpg.destroy_context()
     print("👋 Group comparison panel closed")
 
 if __name__ == "__main__":
