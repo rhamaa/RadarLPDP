@@ -7,10 +7,12 @@ Analisis persamaan dalam group dan perbedaan antar group
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+from collections import OrderedDict
 import hashlib
+from datetime import datetime
 import numpy as np
+import pandas as pd
 import dearpygui.dearpygui as dpg
-from scipy import stats
 
 # Add parent directory to path
 parent_dir = Path(__file__).parent.parent
@@ -21,6 +23,8 @@ from config import SAMPLE_RATE, FFT_SMOOTHING_ENABLED, FFT_SMOOTHING_WINDOW
 
 # Configuration
 SAMPLE_DIR = Path(__file__).parent / "sample"
+EXPORT_DIR = Path(__file__).parent / "exports"
+DEFAULT_LAYOUT_SPLIT = 70  # percent allocated to plot column
 
 # Color palette untuk setiap group
 GROUP_COLORS = {
@@ -46,8 +50,6 @@ class GroupAnalyzer:
         self.groups = {}  # {group_name: {filename: {data, stats}}}
         self.group_stats = {}  # {group_name: {ch1_stats, ch2_stats}}
         self.selected_groups = set()
-        self.enable_nulling = True
-        self.nulling_threshold_rank = 10
         self.group_filter = ""
         self.suppress_group_checkbox = False
     
@@ -114,14 +116,8 @@ class GroupAnalyzer:
                 )
                 
                 # Find peaks
-                ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=20)
-                ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=20)
-                
-                # Apply nulling if enabled
-                if self.enable_nulling and len(ch1_peaks) > self.nulling_threshold_rank:
-                    mag_ch1 = self._apply_nulling(mag_ch1, ch1_peaks, self.nulling_threshold_rank)
-                if self.enable_nulling and len(ch2_peaks) > self.nulling_threshold_rank:
-                    mag_ch2 = self._apply_nulling(mag_ch2, ch2_peaks, self.nulling_threshold_rank)
+                ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=8)
+                ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=8)
                 
                 # Store data
                 self.groups[group_name][filename] = {
@@ -146,87 +142,119 @@ class GroupAnalyzer:
         
         return True
     
-    def _apply_nulling(self, magnitudes, peaks, threshold_rank):
-        """Null data yang bukan termasuk top N peaks"""
-        if len(peaks) <= threshold_rank:
-            return magnitudes
-        
-        threshold_mag = peaks[threshold_rank - 1]['mag_db']
-        mag_nulled = magnitudes.copy()
-        min_mag = np.min(magnitudes)
-        mag_nulled[mag_nulled < threshold_mag] = min_mag
-        
-        return mag_nulled
-    
     def _compute_group_stats(self, group_name: str):
         """Compute statistik untuk group"""
-        if group_name not in self.groups:
+        if group_name not in self.groups or not self.groups[group_name]:
             return
         
         group_data = self.groups[group_name]
         
-        if not group_data:
-            return
+        # Collect magnitudes dan peaks dari semua file
+        all_ch1_mags, all_ch2_mags = [], []
+        all_ch1_peaks, all_ch2_peaks = [], []
         
-        # Collect all magnitudes
-        all_ch1_mags = []
-        all_ch2_mags = []
-        all_ch1_peaks_freqs = []
-        all_ch2_peaks_freqs = []
-        
-        for filename, data in group_data.items():
+        for data in group_data.values():
             all_ch1_mags.extend(data['mag_ch1'])
             all_ch2_mags.extend(data['mag_ch2'])
-            
-            for peak in data['ch1_peaks'][:5]:
-                all_ch1_peaks_freqs.append(peak['freq_khz'])
-            for peak in data['ch2_peaks'][:5]:
-                all_ch2_peaks_freqs.append(peak['freq_khz'])
+            all_ch1_peaks.extend(data['ch1_peaks'])
+            all_ch2_peaks.extend(data['ch2_peaks'])
         
-        # Compute statistics
+        # Helper untuk compute channel stats
+        def compute_channel_stats(mags, peaks):
+            peak_freqs = [p['freq_khz'] for p in peaks]
+            top_peaks = sorted(peaks, key=lambda p: p['mag_db'], reverse=True)[:5]
+            return {
+                'mean_mag': np.mean(mags),
+                'std_mag': np.std(mags),
+                'min_mag': np.min(mags),
+                'max_mag': np.max(mags),
+                'median_peak_freq': np.median(peak_freqs) if peak_freqs else 0,
+                'std_peak_freq': np.std(peak_freqs) if peak_freqs else 0,
+                'top_peaks': top_peaks,
+            }
+        
         self.group_stats[group_name] = {
-            'ch1': {
-                'mean_mag': np.mean(all_ch1_mags),
-                'std_mag': np.std(all_ch1_mags),
-                'min_mag': np.min(all_ch1_mags),
-                'max_mag': np.max(all_ch1_mags),
-                'median_peak_freq': np.median(all_ch1_peaks_freqs) if all_ch1_peaks_freqs else 0,
-                'std_peak_freq': np.std(all_ch1_peaks_freqs) if all_ch1_peaks_freqs else 0,
-            },
-            'ch2': {
-                'mean_mag': np.mean(all_ch2_mags),
-                'std_mag': np.std(all_ch2_mags),
-                'min_mag': np.min(all_ch2_mags),
-                'max_mag': np.max(all_ch2_mags),
-                'median_peak_freq': np.median(all_ch2_peaks_freqs) if all_ch2_peaks_freqs else 0,
-                'std_peak_freq': np.std(all_ch2_peaks_freqs) if all_ch2_peaks_freqs else 0,
-            },
+            'ch1': compute_channel_stats(all_ch1_mags, all_ch1_peaks),
+            'ch2': compute_channel_stats(all_ch2_mags, all_ch2_peaks),
             'n_samples': len(group_data)
         }
-    
-    def compute_group_differences(self, group1: str, group2: str) -> Dict:
-        """Hitung perbedaan statistik antar group"""
-        if group1 not in self.group_stats or group2 not in self.group_stats:
-            return {}
-        
-        stats1 = self.group_stats[group1]
-        stats2 = self.group_stats[group2]
-        
-        differences = {
-            'ch1': {
-                'mean_mag_diff': stats2['ch1']['mean_mag'] - stats1['ch1']['mean_mag'],
-                'std_mag_diff': stats2['ch1']['std_mag'] - stats1['ch1']['std_mag'],
-                'median_freq_diff': stats2['ch1']['median_peak_freq'] - stats1['ch1']['median_peak_freq'],
-            },
-            'ch2': {
-                'mean_mag_diff': stats2['ch2']['mean_mag'] - stats1['ch2']['mean_mag'],
-                'std_mag_diff': stats2['ch2']['std_mag'] - stats1['ch2']['std_mag'],
-                'median_freq_diff': stats2['ch2']['median_peak_freq'] - stats1['ch2']['median_peak_freq'],
-            }
-        }
-        
-        return differences
-    
+
+    def export_selected_to_excel(self, filepath: Path):
+        """Export statistik dan peak detail dari group terpilih ke Excel"""
+        if not self.selected_groups:
+            raise ValueError("Tidak ada group yang dipilih")
+
+        stats_rows: List[Dict] = []
+        peak_columns: "OrderedDict[Tuple[str, str], Dict[str, List[str]]" = OrderedDict()
+        max_peak_rank = 0
+
+        for group_name in sorted(self.selected_groups):
+            stats = self.group_stats.get(group_name)
+            if not stats:
+                continue
+
+            n_samples = stats.get('n_samples', 0)
+
+            for ch_key, ch_label in [('ch1', 'CH1'), ('ch2', 'CH2')]:
+                ch_stats = stats.get(ch_key)
+                if not ch_stats:
+                    continue
+
+                stats_rows.append({
+                    'Group': group_name,
+                    'Channel': ch_label,
+                    'Mean Mag (dB)': ch_stats.get('mean_mag'),
+                    'Std Mag (dB)': ch_stats.get('std_mag'),
+                    'Min Mag (dB)': ch_stats.get('min_mag'),
+                    'Max Mag (dB)': ch_stats.get('max_mag'),
+                    'Median Peak Freq (kHz)': ch_stats.get('median_peak_freq'),
+                    'Std Peak Freq (kHz)': ch_stats.get('std_peak_freq'),
+                    'N Samples': n_samples,
+                })
+
+                # Format peak data untuk export matrix (sesuai contoh)
+                peaks = ch_stats.get('top_peaks', [])
+                max_peak_rank = max(max_peak_rank, len(peaks))
+
+                column_key = (group_name, ch_label)
+                column_data = {
+                    'index': [],
+                    'freq': [],
+                    'mag': [],
+                }
+
+                for peak in peaks:
+                    column_data['index'].append(str(peak.get('index', '-')))
+                    freq = peak.get('freq_khz')
+                    mag = peak.get('mag_db')
+                    column_data['freq'].append(f"{freq:.2f}" if freq is not None else "-")
+                    column_data['mag'].append(f"{mag:.2f}" if mag is not None else "-")
+
+                peak_columns[column_key] = column_data
+
+        if not stats_rows:
+            raise ValueError("Data statistik tidak tersedia untuk group terpilih")
+
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
+            pd.DataFrame(stats_rows).to_excel(writer, sheet_name="Group Statistics", index=False)
+
+            if max_peak_rank > 0 and peak_columns:
+                # Pastikan semua kolom memiliki panjang yang sama dengan max_peak_rank
+                peak_matrix = OrderedDict()
+                for column_key, value_dict in peak_columns.items():
+                    for sub_key in ['index', 'freq', 'mag']:
+                        values = value_dict.get(sub_key, [])
+                        if len(values) < max_peak_rank:
+                            values = values + [""] * (max_peak_rank - len(values))
+                        peak_matrix[(column_key[0], column_key[1], sub_key)] = values
+
+                peak_df = pd.DataFrame(peak_matrix, index=range(1, max_peak_rank + 1))
+                peak_df.index.name = "Peak Rank"
+                peak_df.columns = pd.MultiIndex.from_tuples(peak_df.columns, names=["Group", "Channel", "Metric"])
+                peak_df.to_excel(writer, sheet_name="Peak Details")
+
     def toggle_group(self, group_name: str) -> bool:
         """Toggle group selection"""
         if group_name in self.selected_groups:
@@ -237,6 +265,26 @@ class GroupAnalyzer:
             return True
 
 analyzer = GroupAnalyzer()
+
+# Color mapping untuk konsistensi antara plot dan tabel
+_group_color_cache = {}  # {group_name: color}
+
+def get_group_color(group_name: str, color_idx: int = None) -> Tuple[int, int, int]:
+    """Get warna untuk group dengan caching untuk konsistensi"""
+    if group_name in _group_color_cache:
+        return _group_color_cache[group_name]
+    
+    # Cek GROUP_COLORS dulu
+    if group_name in GROUP_COLORS:
+        color = GROUP_COLORS[group_name]
+    else:
+        # Gunakan SAMPLE_COLORS dengan index
+        if color_idx is None:
+            color_idx = len(_group_color_cache) % len(SAMPLE_COLORS)
+        color = SAMPLE_COLORS[color_idx]
+    
+    _group_color_cache[group_name] = color
+    return color
 
 # Callbacks
 def toggle_group_callback(sender, app_data, user_data):
@@ -254,75 +302,56 @@ def toggle_group_callback(sender, app_data, user_data):
     update_all_visualizations()
 
 def update_all_visualizations():
-    """Update semua visualisasi"""
-    # Clear plots
-    clear_plot_series("ch1_overlay_yaxis")
-    clear_plot_series("ch2_overlay_yaxis")
-    
-    # Clear tables
-    clear_comparison_table()
-    clear_stats_table()
+    """Update semua visualisasi dengan warna konsisten"""
+    # Clear semua elemen
+    for axis in ["ch1_overlay_yaxis", "ch2_overlay_yaxis"]:
+        clear_plot_series(axis)
+    for table in ["stats_table", "peak_detail_table"]:
+        clear_table(table)
     
     if not analyzer.selected_groups:
         return
     
-    # Plot overlay untuk setiap group
-    color_idx = 0
-    for group_name in sorted(analyzer.selected_groups):
+    # Clear color cache untuk reset
+    _group_color_cache.clear()
+    
+    # Plot overlay untuk setiap group dengan color index tracking
+    for color_idx, group_name in enumerate(sorted(analyzer.selected_groups)):
         if group_name not in analyzer.groups:
             continue
         
         group_data = analyzer.groups[group_name]
-        group_color = GROUP_COLORS.get(group_name, SAMPLE_COLORS[color_idx % len(SAMPLE_COLORS)])
+        # Gunakan get_group_color dengan color_idx untuk konsistensi
+        group_color = get_group_color(group_name, color_idx)
         
-        # Compute average magnitude untuk group
-        all_ch1_mags = []
-        all_ch2_mags = []
-        freqs_ch1 = None
-        freqs_ch2 = None
+        # Collect magnitudes dan frequencies
+        mags_ch1, mags_ch2 = [], []
+        freqs_ch1 = freqs_ch2 = None
         
-        for filename, data in group_data.items():
-            all_ch1_mags.append(data['mag_ch1'])
-            all_ch2_mags.append(data['mag_ch2'])
+        for data in group_data.values():
+            mags_ch1.append(data['mag_ch1'])
+            mags_ch2.append(data['mag_ch2'])
             if freqs_ch1 is None:
-                freqs_ch1 = data['freqs_ch1']
-            if freqs_ch2 is None:
-                freqs_ch2 = data['freqs_ch2']
+                freqs_ch1, freqs_ch2 = data['freqs_ch1'], data['freqs_ch2']
         
-        # Average magnitude
-        avg_ch1_mag = np.mean(all_ch1_mags, axis=0)
-        avg_ch2_mag = np.mean(all_ch2_mags, axis=0)
-        
-        # Add CH1 series
-        ch1_series = dpg.add_line_series(
-            freqs_ch1,
-            avg_ch1_mag,
-            label=f"{group_name} (avg)",
-            parent="ch1_overlay_yaxis",
-        )
-        dpg.bind_item_theme(ch1_series, create_line_theme(group_color))
-        
-        # Add CH2 series
-        ch2_series = dpg.add_line_series(
-            freqs_ch2,
-            avg_ch2_mag,
-            label=f"{group_name} (avg)",
-            parent="ch2_overlay_yaxis",
-        )
-        dpg.bind_item_theme(ch2_series, create_line_theme(group_color))
-        
-        color_idx += 1
+        # Plot average magnitudes dengan warna yang di-cache
+        _plot_channel_series(freqs_ch1, np.mean(mags_ch1, axis=0), group_name, 
+                            "ch1_overlay_yaxis", group_color)
+        _plot_channel_series(freqs_ch2, np.mean(mags_ch2, axis=0), group_name, 
+                            "ch2_overlay_yaxis", group_color)
     
     # Auto-fit axes
-    dpg.fit_axis_data("ch1_overlay_xaxis")
-    dpg.fit_axis_data("ch1_overlay_yaxis")
-    dpg.fit_axis_data("ch2_overlay_xaxis")
-    dpg.fit_axis_data("ch2_overlay_yaxis")
+    for axis in ["ch1_overlay_xaxis", "ch1_overlay_yaxis", "ch2_overlay_xaxis", "ch2_overlay_yaxis"]:
+        dpg.fit_axis_data(axis)
     
-    # Update tables
+    # Update tables dengan warna yang sudah di-cache
     update_stats_table()
-    if len(analyzer.selected_groups) >= 2:
-        update_comparison_table()
+    update_peak_detail_table()
+
+def _plot_channel_series(freqs, mags, label, parent_axis, color):
+    """Helper untuk plot series dengan theme"""
+    series = dpg.add_line_series(freqs, mags, label=f"{label} (avg)", parent=parent_axis)
+    dpg.bind_item_theme(series, create_line_theme(color))
 
 def clear_plot_series(axis_tag):
     """Clear all series dari axis"""
@@ -331,24 +360,16 @@ def clear_plot_series(axis_tag):
         for child in children:
             dpg.delete_item(child)
 
-def clear_comparison_table():
-    """Clear comparison table"""
-    if dpg.does_item_exist("comparison_table"):
-        children = dpg.get_item_children("comparison_table", slot=1)
-        if children:
-            for child in children:
-                dpg.delete_item(child)
-
-def clear_stats_table():
-    """Clear stats table"""
-    if dpg.does_item_exist("stats_table"):
-        children = dpg.get_item_children("stats_table", slot=1)
+def clear_table(table_tag):
+    """Clear rows dari table"""
+    if dpg.does_item_exist(table_tag):
+        children = dpg.get_item_children(table_tag, slot=1)
         if children:
             for child in children:
                 dpg.delete_item(child)
 
 def update_stats_table():
-    """Update tabel statistik group"""
+    """Update tabel statistik group dengan warna dari cache"""
     if not dpg.does_item_exist("stats_table"):
         return
     
@@ -357,54 +378,39 @@ def update_stats_table():
             continue
         
         stats = analyzer.group_stats[group_name]
-        group_color = GROUP_COLORS.get(group_name, (200, 200, 200))
+        # Gunakan cached color untuk konsistensi dengan plot
+        group_color = _group_color_cache.get(group_name, (200, 200, 200))
         
-        # CH1 Stats
-        with dpg.table_row(parent="stats_table"):
-            dpg.add_text(f"{group_name} - CH1", color=group_color)
-            dpg.add_text(f"{stats['ch1']['mean_mag']:.2f}")
-            dpg.add_text(f"{stats['ch1']['std_mag']:.2f}")
-            dpg.add_text(f"{stats['ch1']['median_peak_freq']:.2f}")
-            dpg.add_text(f"{stats['n_samples']}")
-        
-        # CH2 Stats
-        with dpg.table_row(parent="stats_table"):
-            dpg.add_text(f"{group_name} - CH2", color=group_color)
-            dpg.add_text(f"{stats['ch2']['mean_mag']:.2f}")
-            dpg.add_text(f"{stats['ch2']['std_mag']:.2f}")
-            dpg.add_text(f"{stats['ch2']['median_peak_freq']:.2f}")
-            dpg.add_text(f"{stats['n_samples']}")
+        # Add rows untuk CH1 dan CH2
+        for ch, label in [('ch1', 'CH1'), ('ch2', 'CH2')]:
+            with dpg.table_row(parent="stats_table"):
+                dpg.add_text(f"{group_name} - {label}", color=group_color)
+                dpg.add_text(f"{stats[ch]['mean_mag']:.2f}")
+                dpg.add_text(f"{stats[ch]['std_mag']:.2f}")
+                dpg.add_text(f"{stats[ch]['median_peak_freq']:.2f}")
+                dpg.add_text(f"{stats['n_samples']}")
 
-def update_comparison_table():
-    """Update tabel perbandingan antar group"""
-    if not dpg.does_item_exist("comparison_table"):
+def update_peak_detail_table():
+    """Update tabel detail peak dengan index dan warna konsisten"""
+    if not dpg.does_item_exist("peak_detail_table"):
         return
     
-    groups_list = sorted(list(analyzer.selected_groups))
-    
-    if len(groups_list) < 2:
-        return
-    
-    # Compare first two selected groups
-    group1, group2 = groups_list[0], groups_list[1]
-    diffs = analyzer.compute_group_differences(group1, group2)
-    
-    if not diffs:
-        return
-    
-    # CH1 Differences
-    with dpg.table_row(parent="comparison_table"):
-        dpg.add_text(f"{group1} vs {group2} - CH1")
-        dpg.add_text(f"{diffs['ch1']['mean_mag_diff']:+.2f}")
-        dpg.add_text(f"{diffs['ch1']['std_mag_diff']:+.2f}")
-        dpg.add_text(f"{diffs['ch1']['median_freq_diff']:+.2f}")
-    
-    # CH2 Differences
-    with dpg.table_row(parent="comparison_table"):
-        dpg.add_text(f"{group1} vs {group2} - CH2")
-        dpg.add_text(f"{diffs['ch2']['mean_mag_diff']:+.2f}")
-        dpg.add_text(f"{diffs['ch2']['std_mag_diff']:+.2f}")
-        dpg.add_text(f"{diffs['ch2']['median_freq_diff']:+.2f}")
+    for group_name in sorted(analyzer.selected_groups):
+        stats = analyzer.group_stats.get(group_name)
+        if not stats:
+            continue
+        
+        # Gunakan cached color untuk konsistensi dengan plot
+        group_color = _group_color_cache.get(group_name, (200, 200, 200))
+        for ch, label in [('ch1', 'CH1'), ('ch2', 'CH2')]:
+            for idx, peak in enumerate(stats[ch].get('top_peaks', []), start=1):
+                with dpg.table_row(parent="peak_detail_table"):
+                    dpg.add_text(group_name, color=group_color)
+                    dpg.add_text(label)
+                    dpg.add_text(f"#{idx}")
+                    dpg.add_text(str(peak.get('index', '-')))
+                    dpg.add_text(f"{peak.get('freq_khz', 0):.2f}")
+                    dpg.add_text(f"{peak.get('mag_db', 0):.2f}")
 
 def create_line_theme(color):
     """Create theme untuk line series"""
@@ -428,13 +434,23 @@ def clear_all_callback():
     
     update_all_visualizations()
 
+def export_to_excel_callback():
+    """Export data statistik dan peak ke file Excel"""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filepath = EXPORT_DIR / f"group_comparison_{timestamp}.xlsx"
+    try:
+        analyzer.export_selected_to_excel(filepath)
+        dpg.set_value("export_status_text", f"✅ Exported to {filepath}")
+    except ValueError as err:
+        dpg.set_value("export_status_text", f"⚠️ {err}")
+    except Exception as exc:
+        dpg.set_value("export_status_text", f"❌ Export failed: {exc}")
+
 def update_layout_split():
     """Update layout split ratio berdasarkan slider value"""
-    if not dpg.does_item_exist("layout_slider"):
-        return
-    split_percent = dpg.get_value("layout_slider")
     viewport_width = dpg.get_viewport_client_width()
     available_width = max(viewport_width - 60, 400)
+    split_percent = DEFAULT_LAYOUT_SPLIT
     left_width = int(available_width * split_percent / 100)
     right_width = available_width - left_width
     if dpg.does_item_exist("left_column"):
@@ -442,8 +458,6 @@ def update_layout_split():
     if dpg.does_item_exist("right_column"):
         dpg.configure_item("right_column", width=right_width, height=-1)
 
-def layout_slider_callback(sender, app_data, user_data):
-    update_layout_split()
 
 def viewport_resize_callback(sender, app_data):
     update_layout_split()
@@ -567,17 +581,7 @@ def create_group_comparison_panel():
         
         dpg.add_separator()
         
-        dpg.add_slider_int(
-            label="Layout Split (%)",
-            default_value=65,
-            min_value=30,
-            max_value=70,
-            tag="layout_slider",
-            width=320,
-            callback=layout_slider_callback
-        )
-        dpg.add_text("← Adjust to resize overlay vs stats area →", color=(150, 150, 150))
-        
+        dpg.add_text("Layout menggunakan rasio tetap untuk plot dan statistik", color=(120, 120, 120))
         dpg.add_separator()
         
         # Layout: 2 columns
@@ -606,9 +610,9 @@ def create_group_comparison_panel():
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="ch2_overlay_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="ch2_overlay_yaxis")
             
-            # Right column: Statistics & Comparison
+            # Right column: Statistics & Peaks
             with dpg.child_window(tag="right_column", border=False):
-                dpg.add_text("Group Statistics & Comparison", color=(100, 255, 150))
+                dpg.add_text("Group Statistics", color=(100, 255, 150))
                 
                 dpg.add_spacer(height=5)
                 
@@ -620,8 +624,10 @@ def create_group_comparison_panel():
                     borders_outerH=True,
                     borders_innerV=True,
                     borders_outerV=True,
+                    resizable=True,
+                    policy=dpg.mvTable_SizingFixedFit,
                     tag="stats_table",
-                    height=310,
+                    height=220,
                     scrollY=True
                 ):
                     dpg.add_table_column(label="Group-CH", width_fixed=True, init_width_or_weight=120)
@@ -630,27 +636,32 @@ def create_group_comparison_panel():
                     dpg.add_table_column(label="Med Freq", width_fixed=True, init_width_or_weight=75)
                     dpg.add_table_column(label="N Samples", width_fixed=True, init_width_or_weight=65)
                 
-                dpg.add_spacer(height=10)
-                
-                # Group Comparison Table
-                dpg.add_text("🔍 Group Differences (Perbedaan Antar Group)", color=(200, 100, 100))
+                dpg.add_spacer(height=8)
+                dpg.add_text("📌 Peak Details", color=(200, 200, 100))
                 with dpg.table(
                     header_row=True,
                     borders_innerH=True,
                     borders_outerH=True,
                     borders_innerV=True,
                     borders_outerV=True,
-                    tag="comparison_table",
-                    height=310,
+                    resizable=True,
+                    policy=dpg.mvTable_SizingFixedFit,
+                    tag="peak_detail_table",
+                    height=220,
                     scrollY=True
                 ):
-                    dpg.add_table_column(label="Comparison", width_fixed=True, init_width_or_weight=120)
-                    dpg.add_table_column(label="ΔMean Mag", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="ΔStd Mag", width_fixed=True, init_width_or_weight=90)
-                    dpg.add_table_column(label="ΔMed Freq", width_fixed=True, init_width_or_weight=75)
+                    dpg.add_table_column(label="Group", width_fixed=True, init_width_or_weight=120)
+                    dpg.add_table_column(label="Channel", width_fixed=True, init_width_or_weight=60)
+                    dpg.add_table_column(label="Rank", width_fixed=True, init_width_or_weight=45)
+                    dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=60)
+                    dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=80)
+                    dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=80)
         
         dpg.add_separator()
-        dpg.add_text("💡 Tip: Pilih 2+ groups untuk melihat perbandingan. Setiap group menunjukkan rata-rata dari semua sample dalam group tersebut", 
+        with dpg.group(horizontal=True):
+            dpg.add_button(label="💾 Export to Excel", callback=export_to_excel_callback)
+            dpg.add_text("", tag="export_status_text", color=(180, 180, 180))
+        dpg.add_text("💡 Tip: Checklist satu atau beberapa group untuk melihat rata-rata FFT beserta statistiknya.", 
                      color=(150, 150, 150))
     
     # Setup viewport
@@ -659,7 +670,7 @@ def create_group_comparison_panel():
     dpg.set_viewport_resize_callback(viewport_resize_callback)
     dpg.show_viewport()
     dpg.set_primary_window("main_window", True)
-    dpg.configure_item("main_window", width=-1, height=-1)
+    dpg.configure_item("main_window", pos=(0, 0), width=-1, height=-1)
     update_group_tree_ui()
     update_layout_split()
     
