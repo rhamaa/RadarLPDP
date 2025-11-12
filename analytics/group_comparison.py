@@ -6,7 +6,7 @@ Analisis persamaan dalam group dan perbedaan antar group
 
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from collections import OrderedDict
 import hashlib
 from datetime import datetime
@@ -52,6 +52,17 @@ class GroupAnalyzer:
         self.selected_groups = set()
         self.group_filter = ""
         self.suppress_group_checkbox = False
+        self.export_peak_fields = {
+            'index': True,
+            'freq': True,
+            'mag': True,
+        }
+        self.export_peak_count = 100
+        self.export_channels = {
+            'ch1': True,
+            'ch2': True,
+        }
+        self.export_freq_range = (4000.0, 7000.0)
     
     def discover_groups(self):
         """Discover semua group dari direktori sample (recursive)"""
@@ -116,8 +127,9 @@ class GroupAnalyzer:
                 )
                 
                 # Find peaks
-                ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=8)
-                ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=8)
+                peak_limit = self.export_peak_count
+                ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=peak_limit)
+                ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=peak_limit)
                 
                 # Store data
                 self.groups[group_name][filename] = {
@@ -160,9 +172,13 @@ class GroupAnalyzer:
             all_ch2_peaks.extend(data['ch2_peaks'])
         
         # Helper untuk compute channel stats
+        export_limit = max(1, self.export_peak_count)
+
         def compute_channel_stats(mags, peaks):
             peak_freqs = [p['freq_khz'] for p in peaks]
-            top_peaks = sorted(peaks, key=lambda p: p['mag_db'], reverse=True)[:5]
+            sorted_peaks = sorted(peaks, key=lambda p: p['mag_db'], reverse=True)
+            export_peaks = sorted_peaks[:export_limit]
+            ui_peaks = export_peaks[:5]
             return {
                 'mean_mag': np.mean(mags),
                 'std_mag': np.std(mags),
@@ -170,7 +186,8 @@ class GroupAnalyzer:
                 'max_mag': np.max(mags),
                 'median_peak_freq': np.median(peak_freqs) if peak_freqs else 0,
                 'std_peak_freq': np.std(peak_freqs) if peak_freqs else 0,
-                'top_peaks': top_peaks,
+                'top_peaks': ui_peaks,
+                'export_peaks': export_peaks,
             }
         
         self.group_stats[group_name] = {
@@ -185,10 +202,19 @@ class GroupAnalyzer:
             raise ValueError("Tidak ada group yang dipilih")
 
         stats_rows: List[Dict] = []
-        peak_columns: "OrderedDict[Tuple[str, str], Dict[str, List[str]]" = OrderedDict()
+        peak_columns: "OrderedDict[Tuple[str, str], Dict[str, List[str]]]" = OrderedDict()
         max_peak_rank = 0
 
-        for group_name in sorted(self.selected_groups):
+        sorted_groups = sorted(self.selected_groups)
+
+        export_colors: Dict[str, Tuple[int, int, int]] = {}
+        for color_idx, group_name in enumerate(sorted_groups):
+            export_colors[group_name] = GROUP_COLORS.get(
+                group_name,
+                SAMPLE_COLORS[color_idx % len(SAMPLE_COLORS)]
+            )
+
+        for group_name in sorted_groups:
             stats = self.group_stats.get(group_name)
             if not stats:
                 continue
@@ -196,6 +222,8 @@ class GroupAnalyzer:
             n_samples = stats.get('n_samples', 0)
 
             for ch_key, ch_label in [('ch1', 'CH1'), ('ch2', 'CH2')]:
+                if not self.export_channels.get(ch_key, True):
+                    continue
                 ch_stats = stats.get(ch_key)
                 if not ch_stats:
                     continue
@@ -213,22 +241,25 @@ class GroupAnalyzer:
                 })
 
                 # Format peak data untuk export matrix (sesuai contoh)
-                peaks = ch_stats.get('top_peaks', [])
+                peaks = ch_stats.get('export_peaks') or ch_stats.get('top_peaks', [])
+                freq_min, freq_max = self.export_freq_range
+                peaks = [p for p in peaks if freq_min <= (p.get('freq_khz') or 0) <= freq_max]
+                peaks = peaks[:self.export_peak_count]
                 max_peak_rank = max(max_peak_rank, len(peaks))
 
                 column_key = (group_name, ch_label)
-                column_data = {
-                    'index': [],
-                    'freq': [],
-                    'mag': [],
-                }
+                chosen_metrics = [k for k, v in self.export_peak_fields.items() if v]
+                column_data = {metric: [] for metric in chosen_metrics}
 
                 for peak in peaks:
-                    column_data['index'].append(str(peak.get('index', '-')))
-                    freq = peak.get('freq_khz')
-                    mag = peak.get('mag_db')
-                    column_data['freq'].append(f"{freq:.2f}" if freq is not None else "-")
-                    column_data['mag'].append(f"{mag:.2f}" if mag is not None else "-")
+                    if 'index' in column_data:
+                        column_data['index'].append(str(peak.get('index', '-')))
+                    if 'freq' in column_data:
+                        freq = peak.get('freq_khz')
+                        column_data['freq'].append(f"{freq:.2f}" if freq is not None else "-")
+                    if 'mag' in column_data:
+                        mag = peak.get('mag_db')
+                        column_data['mag'].append(f"{mag:.2f}" if mag is not None else "-")
 
                 peak_columns[column_key] = column_data
 
@@ -240,20 +271,98 @@ class GroupAnalyzer:
         with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
             pd.DataFrame(stats_rows).to_excel(writer, sheet_name="Group Statistics", index=False)
 
-            if max_peak_rank > 0 and peak_columns:
+            chosen_metrics = [k for k, v in self.export_peak_fields.items() if v]
+            if max_peak_rank > 0 and peak_columns and chosen_metrics:
                 # Pastikan semua kolom memiliki panjang yang sama dengan max_peak_rank
                 peak_matrix = OrderedDict()
+                peak_column_order: List[Tuple[str, str, str]] = []
                 for column_key, value_dict in peak_columns.items():
                     for sub_key in ['index', 'freq', 'mag']:
+                        if sub_key not in chosen_metrics:
+                            continue
                         values = value_dict.get(sub_key, [])
                         if len(values) < max_peak_rank:
                             values = values + [""] * (max_peak_rank - len(values))
-                        peak_matrix[(column_key[0], column_key[1], sub_key)] = values
+                        key = (column_key[0], column_key[1], sub_key)
+                        peak_matrix[key] = values
+                        peak_column_order.append(key)
 
                 peak_df = pd.DataFrame(peak_matrix, index=range(1, max_peak_rank + 1))
                 peak_df.index.name = "Peak Rank"
                 peak_df.columns = pd.MultiIndex.from_tuples(peak_df.columns, names=["Group", "Channel", "Metric"])
                 peak_df.to_excel(writer, sheet_name="Peak Details")
+
+                workbook = writer.book
+                worksheet = writer.sheets["Peak Details"]
+
+                # Formats untuk header dan data
+                index_header_fmt = workbook.add_format({
+                    'bold': True,
+                    'bg_color': '#303030',
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1
+                })
+                data_fmt = workbook.add_format({'align': 'center'})
+
+                worksheet.write(0, 0, "", index_header_fmt)
+                worksheet.write(1, 0, "", index_header_fmt)
+                worksheet.write(2, 0, "Peak Rank", index_header_fmt)
+                worksheet.set_column(0, 0, 10, data_fmt)
+
+                group_header_formats: Dict[str, any] = {}
+                channel_header_formats: Dict[Tuple[str, str], any] = {}
+                metric_header_formats: Dict[Tuple[str, str], any] = {}
+                channel_data_formats: Dict[Tuple[str, str], any] = {}
+
+                channel_style_factors = {
+                    'CH1': {'channel': 0.45, 'metric': 0.65, 'data': 0.85},
+                    'CH2': {'channel': 0.20, 'metric': 0.45, 'data': 0.70},
+                }
+
+                for col_idx, (group, channel, metric) in enumerate(peak_column_order):
+                    excel_col = col_idx + 1  # offset karena kolom index
+                    base_color = export_colors.get(group, (200, 200, 200))
+
+                    if group not in group_header_formats:
+                        group_header_formats[group] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(base_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+
+                    style_factors = channel_style_factors.get(channel, channel_style_factors['CH1'])
+
+                    if (group, channel) not in channel_header_formats:
+                        channel_color = _lighten_color(base_color, style_factors['channel'])
+                        channel_header_formats[(group, channel)] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(channel_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+                        metric_color = _lighten_color(base_color, style_factors['metric'])
+                        metric_header_formats[(group, channel)] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(metric_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+                        data_color = _lighten_color(base_color, style_factors['data'])
+                        channel_data_formats[(group, channel)] = workbook.add_format({
+                            'align': 'center',
+                            'bg_color': _rgb_to_hex(data_color),
+                            'border': 1
+                        })
+
+                    worksheet.write(0, excel_col, group, group_header_formats[group])
+                    worksheet.write(1, excel_col, channel, channel_header_formats[(group, channel)])
+                    worksheet.write(2, excel_col, metric.capitalize(), metric_header_formats[(group, channel)])
+                    worksheet.set_column(excel_col, excel_col, 14, channel_data_formats[(group, channel)])
 
     def toggle_group(self, group_name: str) -> bool:
         """Toggle group selection"""
@@ -268,6 +377,14 @@ analyzer = GroupAnalyzer()
 
 # Color mapping untuk konsistensi antara plot dan tabel
 _group_color_cache = {}  # {group_name: color}
+
+def _rgb_to_hex(color: Tuple[int, int, int]) -> str:
+    """Convert RGB tuple ke format hex untuk Excel"""
+    return "#{:02X}{:02X}{:02X}".format(*color)
+
+def _lighten_color(color: Tuple[int, int, int], factor: float) -> Tuple[int, int, int]:
+    """Lighten warna dengan faktor 0..1"""
+    return tuple(min(255, int(c + (255 - c) * factor)) for c in color)
 
 def get_group_color(group_name: str, color_idx: int = None) -> Tuple[int, int, int]:
     """Get warna untuk group dengan caching untuk konsistensi"""
@@ -445,6 +562,59 @@ def export_to_excel_callback():
         dpg.set_value("export_status_text", f"⚠️ {err}")
     except Exception as exc:
         dpg.set_value("export_status_text", f"❌ Export failed: {exc}")
+
+def toggle_export_metric_callback(sender, app_data, user_data):
+    """Toggle metric yang diexport untuk peak details"""
+    analyzer.export_peak_fields[user_data] = bool(app_data)
+    selected_metrics = [name for name, enabled in analyzer.export_peak_fields.items() if enabled]
+    if not selected_metrics:
+        dpg.set_value("export_status_text", "⚠️ Tidak ada metric peak terpilih. Hanya statistik group yang akan diexport.")
+    else:
+        dpg.set_value("export_status_text", "")
+
+def toggle_export_channel_callback(sender, app_data, user_data):
+    """Toggle channel yang diikutkan pada ekspor"""
+    analyzer.export_channels[user_data] = bool(app_data)
+    selected_channels = [name for name, enabled in analyzer.export_channels.items() if enabled]
+    if not selected_channels:
+        dpg.set_value("export_status_text", "⚠️ Minimal pilih satu channel untuk ekspor peak details.")
+    else:
+        dpg.set_value("export_status_text", "")
+
+def update_export_freq_range_callback(sender, app_data, user_data):
+    """Update rentang frekuensi untuk filter peak eksport"""
+    current_min, current_max = analyzer.export_freq_range
+    try:
+        value = float(app_data)
+    except (TypeError, ValueError):
+        value = current_min if user_data == "min" else current_max
+
+    if user_data == "min":
+        new_min, new_max = value, current_max
+    else:
+        new_min, new_max = current_min, value
+
+    if new_min > new_max:
+        new_min, new_max = new_max, new_min
+
+    analyzer.export_freq_range = (new_min, new_max)
+    dpg.set_value("export_status_text", f"ℹ️ Peak diekspor untuk frekuensi {new_min:.0f}-{new_max:.0f} kHz.")
+
+def update_export_peak_count_callback(sender, app_data):
+    """Update jumlah peak yang akan diexport"""
+    try:
+        value = int(app_data)
+    except (TypeError, ValueError):
+        value = analyzer.export_peak_count
+    if value <= 0:
+        value = 100
+    analyzer.export_peak_count = value
+    # Recompute stats untuk group yang sudah dimuat agar list export_peaks tersinkron
+    for group_name in list(analyzer.groups.keys()):
+        if analyzer.groups[group_name]:
+            analyzer._compute_group_stats(group_name)
+    update_all_visualizations()
+    dpg.set_value("export_status_text", f"ℹ️ Peak export count diset ke {value}. Reload group jika ingin data > {value}.")
 
 def update_layout_split():
     """Update layout split ratio berdasarkan slider value"""
@@ -659,6 +829,23 @@ def create_group_comparison_panel():
         
         dpg.add_separator()
         with dpg.group(horizontal=True):
+            dpg.add_text("Peak fields:", color=(180, 180, 180))
+            dpg.add_checkbox(label="Index", default_value=True, callback=toggle_export_metric_callback, user_data="index")
+            dpg.add_checkbox(label="Freq", default_value=True, callback=toggle_export_metric_callback, user_data="freq")
+            dpg.add_checkbox(label="Mag", default_value=True, callback=toggle_export_metric_callback, user_data="mag")
+            dpg.add_spacer(width=10)
+            dpg.add_text("Channels:", color=(180, 180, 180))
+            dpg.add_checkbox(label="CH1", default_value=True, callback=toggle_export_channel_callback, user_data="ch1")
+            dpg.add_checkbox(label="CH2", default_value=True, callback=toggle_export_channel_callback, user_data="ch2")
+            dpg.add_spacer(width=10)
+            dpg.add_text("Freq (kHz):", color=(180, 180, 180))
+            dpg.add_input_float(label="Min", width=80, default_value=analyzer.export_freq_range[0], format="%.0f",
+                                callback=update_export_freq_range_callback, user_data="min")
+            dpg.add_input_float(label="Max", width=80, default_value=analyzer.export_freq_range[1], format="%.0f",
+                                callback=update_export_freq_range_callback, user_data="max")
+            dpg.add_input_int(label="Peak count", width=90, min_value=1, default_value=analyzer.export_peak_count,
+                              callback=update_export_peak_count_callback, step=5)
+            dpg.add_spacer(width=10)
             dpg.add_button(label="💾 Export to Excel", callback=export_to_excel_callback)
             dpg.add_text("", tag="export_status_text", color=(180, 180, 180))
         dpg.add_text("💡 Tip: Checklist satu atau beberapa group untuk melihat rata-rata FFT beserta statistiknya.", 

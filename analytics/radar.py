@@ -7,18 +7,23 @@ Interactive panel untuk analisis sample data radar dengan toggle buttons
 import sys
 from pathlib import Path
 import hashlib
+from collections import OrderedDict
+from datetime import datetime
+from typing import Any, Dict, List, Tuple
 
 # Add parent directory to path
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
 import numpy as np
+import pandas as pd
 import dearpygui.dearpygui as dpg
 from functions.data_processing import load_and_process_data, compute_fft, find_top_extrema
 from config import SAMPLE_RATE, FFT_SMOOTHING_ENABLED, FFT_SMOOTHING_WINDOW
 
 # Configuration
 SAMPLE_DIR = Path(__file__).parent / "sample"
+EXPORT_DIR = Path(__file__).parent / "exports"
 AVAILABLE_FILES = sorted(list(SAMPLE_DIR.glob("**/*.bin")))
 
 # Color palette untuk setiap sample
@@ -33,6 +38,16 @@ SAMPLE_COLORS = [
     (255, 150, 150),  # Light Red
 ]
 
+
+def _rgb_to_hex(color: Tuple[int, int, int]) -> str:
+    """Convert RGB tuple ke format hex"""
+    return "#{:02X}{:02X}{:02X}".format(*color)
+
+
+def _lighten_color(color: Tuple[int, int, int], factor: float) -> Tuple[int, int, int]:
+    """Lighten warna dengan faktor 0..1"""
+    return tuple(min(255, int(c + (255 - c) * factor)) for c in color)
+
 # Global state
 class AnalyticsState:
     def __init__(self):
@@ -42,6 +57,17 @@ class AnalyticsState:
         self.nulling_threshold_rank = 10  # Null data below this peak rank
         self.sample_filter = ""
         self.suppress_checkbox_callback = False
+        self.export_peak_fields: Dict[str, bool] = {
+            'index': True,
+            'freq': True,
+            'mag': True,
+        }
+        self.export_peak_count = 100
+        self.export_channels: Dict[str, bool] = {
+            'ch1': True,
+            'ch2': True,
+        }
+        self.export_freq_range: Tuple[float, float] = (4000.0, 7000.0)
     
     def toggle_sample(self, filename):
         """Toggle visibility sample"""
@@ -73,26 +99,30 @@ class AnalyticsState:
             return
         
         # Compute FFT
-        freqs_ch1, mag_ch1 = compute_fft(
+        freqs_ch1, mag_ch1_raw = compute_fft(
             ch1, SAMPLE_RATE,
             smooth=FFT_SMOOTHING_ENABLED,
             smooth_window=FFT_SMOOTHING_WINDOW
         )
-        freqs_ch2, mag_ch2 = compute_fft(
+        freqs_ch2, mag_ch2_raw = compute_fft(
             ch2, SAMPLE_RATE,
             smooth=FFT_SMOOTHING_ENABLED,
             smooth_window=FFT_SMOOTHING_WINDOW
         )
-        
-        # Find peaks (get more untuk nulling)
-        ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=20)
-        ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=20)
-        
+
+        peak_limit = max(self.export_peak_count, 20)
+        # Find peaks (get more untuk nulling / ekspor)
+        ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1_raw, n_extrema=peak_limit)
+        ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2_raw, n_extrema=peak_limit)
+
+        mag_ch1_display = mag_ch1_raw
+        mag_ch2_display = mag_ch2_raw
+
         # Apply data nulling jika enabled
         if self.enable_nulling and len(ch1_peaks) > self.nulling_threshold_rank:
-            mag_ch1 = self._apply_nulling(mag_ch1, ch1_peaks, self.nulling_threshold_rank)
+            mag_ch1_display = self._apply_nulling(mag_ch1_raw, ch1_peaks, self.nulling_threshold_rank)
         if self.enable_nulling and len(ch2_peaks) > self.nulling_threshold_rank:
-            mag_ch2 = self._apply_nulling(mag_ch2, ch2_peaks, self.nulling_threshold_rank)
+            mag_ch2_display = self._apply_nulling(mag_ch2_raw, ch2_peaks, self.nulling_threshold_rank)
         
         # Assign color
         color = SAMPLE_COLORS[self.next_color_index % len(SAMPLE_COLORS)]
@@ -103,19 +133,21 @@ class AnalyticsState:
             'ch1_data': ch1,
             'ch2_data': ch2,
             'freqs_ch1': freqs_ch1,
-            'mag_ch1': mag_ch1,
+            'mag_ch1_raw': mag_ch1_raw,
+            'mag_ch1': mag_ch1_display,
             'freqs_ch2': freqs_ch2,
-            'mag_ch2': mag_ch2,
+            'mag_ch2_raw': mag_ch2_raw,
+            'mag_ch2': mag_ch2_display,
             'ch1_peaks': ch1_peaks,
             'ch2_peaks': ch2_peaks,
             'color': color,
             'n_samples': n_samples
         }
-        
+
         print(f"✅ Loaded {filename}: {n_samples} samples, {len(ch1_peaks)} CH1 peaks, {len(ch2_peaks)} CH2 peaks")
     
     def _apply_nulling(self, magnitudes, peaks, threshold_rank):
-        """Null (set to minimum) data yang bukan termasuk top N peaks"""
+        """Null data dibawah peak rank tertentu"""
         if len(peaks) <= threshold_rank:
             return magnitudes
         
@@ -130,6 +162,193 @@ class AnalyticsState:
         mag_nulled[mag_nulled < threshold_mag] = min_mag
         
         return mag_nulled
+
+    def refresh_active_sample_peaks(self):
+        """Recompute peak list untuk semua sample aktif sesuai konfigurasi"""
+        if not self.active_samples:
+            return
+        peak_limit = max(self.export_peak_count, 20)
+        for sample_data in self.active_samples.values():
+            freqs_ch1 = sample_data['freqs_ch1']
+            mag_ch1_raw = sample_data.get('mag_ch1_raw', sample_data['mag_ch1'])
+            freqs_ch2 = sample_data['freqs_ch2']
+            mag_ch2_raw = sample_data.get('mag_ch2_raw', sample_data['mag_ch2'])
+
+            ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1_raw, n_extrema=peak_limit)
+            ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2_raw, n_extrema=peak_limit)
+
+            sample_data['ch1_peaks'] = ch1_peaks
+            sample_data['ch2_peaks'] = ch2_peaks
+
+    def export_active_to_excel(self, filepath: Path):
+        """Export statistik dan peak detail dari sample aktif ke Excel"""
+        if not self.active_samples:
+            raise ValueError("Tidak ada sample aktif")
+
+        chosen_channels = [key for key, enabled in self.export_channels.items() if enabled]
+        if not chosen_channels:
+            raise ValueError("Minimal pilih satu channel untuk diexport")
+
+        chosen_metrics = [key for key, enabled in self.export_peak_fields.items() if enabled]
+
+        stats_rows: List[Dict[str, Any]] = []
+        peak_columns: "OrderedDict[Tuple[str, str], Dict[str, List[str]]]" = OrderedDict()
+        max_peak_rank = 0
+
+        freq_min, freq_max = self.export_freq_range
+        peak_limit = self.export_peak_count
+
+        export_colors: Dict[str, Tuple[int, int, int]] = {}
+
+        for filename in sorted(self.active_samples.keys()):
+            sample_data = self.active_samples[filename]
+            export_colors[filename] = sample_data['color']
+
+            for ch_key, ch_label in [('ch1', 'CH1'), ('ch2', 'CH2')]:
+                if ch_key not in chosen_channels:
+                    continue
+
+                mag_raw = sample_data['mag_ch1_raw'] if ch_key == 'ch1' else sample_data['mag_ch2_raw']
+                mag_array = np.asarray(mag_raw)
+                peaks = sample_data.get(f"{ch_key}_peaks", [])
+
+                filtered_peaks = [
+                    peak for peak in peaks
+                    if freq_min <= (peak.get('freq_khz') or 0) <= freq_max
+                ][:peak_limit]
+
+                max_peak_rank = max(max_peak_rank, len(filtered_peaks))
+
+                peak_freqs = [peak.get('freq_khz') for peak in filtered_peaks]
+
+                stats_rows.append({
+                    'Sample': filename,
+                    'Channel': ch_label,
+                    'Mean Mag (dB)': float(np.mean(mag_array)) if mag_array.size else None,
+                    'Std Mag (dB)': float(np.std(mag_array)) if mag_array.size else None,
+                    'Min Mag (dB)': float(np.min(mag_array)) if mag_array.size else None,
+                    'Max Mag (dB)': float(np.max(mag_array)) if mag_array.size else None,
+                    'Median Peak Freq (kHz)': float(np.median(peak_freqs)) if peak_freqs else None,
+                    'Std Peak Freq (kHz)': float(np.std(peak_freqs)) if len(peak_freqs) > 1 else 0.0,
+                    'Peak Count (range)': len(filtered_peaks),
+                    'N Samples': sample_data.get('n_samples', 0),
+                })
+
+                if not chosen_metrics:
+                    continue
+
+                column_key = (filename, ch_label)
+                column_data = {metric: [] for metric in chosen_metrics}
+
+                for peak in filtered_peaks:
+                    if 'index' in column_data:
+                        column_data['index'].append(str(peak.get('index', '-')))
+                    if 'freq' in column_data:
+                        freq = peak.get('freq_khz')
+                        column_data['freq'].append(f"{freq:.2f}" if freq is not None else "-")
+                    if 'mag' in column_data:
+                        mag = peak.get('mag_db')
+                        column_data['mag'].append(f"{mag:.2f}" if mag is not None else "-")
+
+                peak_columns[column_key] = column_data
+
+        if not stats_rows:
+            raise ValueError("Tidak ada data untuk diexport")
+
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        with pd.ExcelWriter(filepath, engine='xlsxwriter') as writer:
+            pd.DataFrame(stats_rows).to_excel(writer, sheet_name="Sample Statistics", index=False)
+
+            if max_peak_rank > 0 and peak_columns and chosen_metrics:
+                peak_matrix = OrderedDict()
+                peak_column_order: List[Tuple[str, str, str]] = []
+                for column_key, value_dict in peak_columns.items():
+                    for metric in ['index', 'freq', 'mag']:
+                        if metric not in chosen_metrics:
+                            continue
+                        values = value_dict.get(metric, [])
+                        if len(values) < max_peak_rank:
+                            values = values + [""] * (max_peak_rank - len(values))
+                        key = (column_key[0], column_key[1], metric)
+                        peak_matrix[key] = values
+                        peak_column_order.append(key)
+
+                peak_df = pd.DataFrame(peak_matrix, index=range(1, max_peak_rank + 1))
+                peak_df.index.name = "Peak Rank"
+                peak_df.columns = pd.MultiIndex.from_tuples(peak_df.columns, names=["Sample", "Channel", "Metric"])
+                peak_df.to_excel(writer, sheet_name="Peak Details")
+
+                workbook = writer.book
+                worksheet = writer.sheets["Peak Details"]
+
+                index_header_fmt = workbook.add_format({
+                    'bold': True,
+                    'bg_color': '#303030',
+                    'align': 'center',
+                    'valign': 'vcenter',
+                    'border': 1
+                })
+                data_fmt = workbook.add_format({'align': 'center'})
+
+                worksheet.write(0, 0, "", index_header_fmt)
+                worksheet.write(1, 0, "", index_header_fmt)
+                worksheet.write(2, 0, "Peak Rank", index_header_fmt)
+                worksheet.set_column(0, 0, 11, data_fmt)
+
+                sample_header_formats: Dict[str, Any] = {}
+                channel_header_formats: Dict[Tuple[str, str], Any] = {}
+                metric_header_formats: Dict[Tuple[str, str], Any] = {}
+                channel_data_formats: Dict[Tuple[str, str], Any] = {}
+
+                channel_style_factors = {
+                    'CH1': {'channel': 0.45, 'metric': 0.65, 'data': 0.85},
+                    'CH2': {'channel': 0.20, 'metric': 0.45, 'data': 0.70},
+                }
+
+                for col_idx, (sample_name, channel, metric) in enumerate(peak_column_order):
+                    excel_col = col_idx + 1
+                    base_color = export_colors.get(sample_name, (180, 180, 180))
+
+                    if sample_name not in sample_header_formats:
+                        sample_header_formats[sample_name] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(base_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+
+                    style_factors = channel_style_factors.get(channel, channel_style_factors['CH1'])
+
+                    if (sample_name, channel) not in channel_header_formats:
+                        channel_color = _lighten_color(base_color, style_factors['channel'])
+                        channel_header_formats[(sample_name, channel)] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(channel_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+                        metric_color = _lighten_color(base_color, style_factors['metric'])
+                        metric_header_formats[(sample_name, channel)] = workbook.add_format({
+                            'bold': True,
+                            'bg_color': _rgb_to_hex(metric_color),
+                            'align': 'center',
+                            'valign': 'vcenter',
+                            'border': 1
+                        })
+                        data_color = _lighten_color(base_color, style_factors['data'])
+                        channel_data_formats[(sample_name, channel)] = workbook.add_format({
+                            'align': 'center',
+                            'bg_color': _rgb_to_hex(data_color),
+                            'border': 1
+                        })
+
+                    worksheet.write(0, excel_col, sample_name, sample_header_formats[sample_name])
+                    worksheet.write(1, excel_col, channel, channel_header_formats[(sample_name, channel)])
+                    worksheet.write(2, excel_col, metric.capitalize(), metric_header_formats[(sample_name, channel)])
+                    worksheet.set_column(excel_col, excel_col, 14, channel_data_formats[(sample_name, channel)])
 
 state = AnalyticsState()
 
@@ -269,6 +488,71 @@ def clear_all_callback():
         state.suppress_checkbox_callback = False
     
     update_all_plots()
+
+
+def export_to_excel_callback():
+    """Export data sample aktif ke file Excel"""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filepath = EXPORT_DIR / f"radar_samples_{timestamp}.xlsx"
+    try:
+        state.export_active_to_excel(filepath)
+        dpg.set_value("export_status_text", f"✅ Exported to {filepath}")
+    except ValueError as err:
+        dpg.set_value("export_status_text", f"⚠️ {err}")
+    except Exception as exc:
+        dpg.set_value("export_status_text", f"❌ Export failed: {exc}")
+
+
+def toggle_export_metric_callback(sender, app_data, user_data):
+    """Toggle metric peak untuk ekspor"""
+    state.export_peak_fields[user_data] = bool(app_data)
+    if not any(state.export_peak_fields.values()):
+        dpg.set_value("export_status_text", "⚠️ Tidak ada metric peak terpilih. Hanya statistik yang akan diexport.")
+    else:
+        dpg.set_value("export_status_text", "")
+
+
+def toggle_export_channel_callback(sender, app_data, user_data):
+    """Toggle channel untuk ekspor"""
+    state.export_channels[user_data] = bool(app_data)
+    if not any(state.export_channels.values()):
+        dpg.set_value("export_status_text", "⚠️ Minimal pilih satu channel untuk ekspor peak.")
+    else:
+        dpg.set_value("export_status_text", "")
+
+
+def update_export_freq_range_callback(sender, app_data, user_data):
+    """Update rentang frekuensi filter peak"""
+    current_min, current_max = state.export_freq_range
+    try:
+        value = float(app_data)
+    except (TypeError, ValueError):
+        value = current_min if user_data == "min" else current_max
+
+    if user_data == "min":
+        new_min, new_max = value, current_max
+    else:
+        new_min, new_max = current_min, value
+
+    if new_min > new_max:
+        new_min, new_max = new_max, new_min
+
+    state.export_freq_range = (new_min, new_max)
+    dpg.set_value("export_status_text", f"ℹ️ Peak diekspor untuk frekuensi {new_min:.0f}-{new_max:.0f} kHz.")
+
+
+def update_export_peak_count_callback(sender, app_data):
+    """Update jumlah peak yang akan diekspor"""
+    try:
+        value = int(app_data)
+    except (TypeError, ValueError):
+        value = state.export_peak_count
+    if value <= 0:
+        value = 100
+    state.export_peak_count = value
+    state.refresh_active_sample_peaks()
+    update_all_plots()
+    dpg.set_value("export_status_text", f"ℹ️ Peak export count diset ke {value}.")
 
 def update_layout_split():
     """Update layout split ratio berdasarkan slider value"""
@@ -455,6 +739,7 @@ def create_analytics_panel():
                     dpg.add_plot_legend(location=dpg.mvPlot_Location_NorthEast)
                     dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (kHz)", tag="fft_ch2_xaxis")
                     dpg.add_plot_axis(dpg.mvYAxis, label="Magnitude (dB)", tag="fft_ch2_yaxis")
+
             
             # Right column: Peak Tables & Controls (scrollable)
             with dpg.child_window(tag="right_column", border=False):
@@ -511,10 +796,78 @@ def create_analytics_panel():
                     dpg.add_table_column(label="Index", width_fixed=True, init_width_or_weight=50)
                     dpg.add_table_column(label="Freq (kHz)", width_fixed=True, init_width_or_weight=75)
                     dpg.add_table_column(label="Mag (dB)", width_fixed=True, init_width_or_weight=70)
-        
+
+                dpg.add_separator()
+                with dpg.collapsing_header(label="📤 Export Options", default_open=True):
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Peak fields:", color=(180, 180, 180))
+                        dpg.add_checkbox(
+                            label="Index",
+                            default_value=state.export_peak_fields['index'],
+                            callback=toggle_export_metric_callback,
+                            user_data="index"
+                        )
+                        dpg.add_checkbox(
+                            label="Freq",
+                            default_value=state.export_peak_fields['freq'],
+                            callback=toggle_export_metric_callback,
+                            user_data="freq"
+                        )
+                        dpg.add_checkbox(
+                            label="Mag",
+                            default_value=state.export_peak_fields['mag'],
+                            callback=toggle_export_metric_callback,
+                            user_data="mag"
+                        )
+                        dpg.add_spacer(width=10)
+                        dpg.add_text("Channels:", color=(180, 180, 180))
+                        dpg.add_checkbox(
+                            label="CH1",
+                            default_value=state.export_channels['ch1'],
+                            callback=toggle_export_channel_callback,
+                            user_data="ch1"
+                        )
+                        dpg.add_checkbox(
+                            label="CH2",
+                            default_value=state.export_channels['ch2'],
+                            callback=toggle_export_channel_callback,
+                            user_data="ch2"
+                        )
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Freq (kHz):", color=(180, 180, 180))
+                        dpg.add_input_float(
+                            label="Min",
+                            width=80,
+                            default_value=state.export_freq_range[0],
+                            format="%.0f",
+                            callback=update_export_freq_range_callback,
+                            user_data="min"
+                        )
+                        dpg.add_input_float(
+                            label="Max",
+                            width=80,
+                            default_value=state.export_freq_range[1],
+                            format="%.0f",
+                            callback=update_export_freq_range_callback,
+                            user_data="max"
+                        )
+                        dpg.add_input_int(
+                            label="Peak count",
+                            width=90,
+                            min_value=1,
+                            default_value=state.export_peak_count,
+                            callback=update_export_peak_count_callback,
+                            step=5
+                        )
+                    with dpg.group(horizontal=True):
+                        dpg.add_button(label="💾 Export to Excel", callback=export_to_excel_callback)
+                        dpg.add_spacer(width=10)
+                        dpg.add_text("", tag="export_status_text", color=(180, 180, 180))
+
         dpg.add_separator()
-        dpg.add_text("💡 Tip: Use the search box to quickly locate samples across nested folders", 
+        dpg.add_text("💡 Tip: Use the search box to quickly locate samples across nested folders",
                      color=(150, 150, 150))
+
     
     # Setup viewport - Fullscreen
     dpg.create_viewport(title="Radar LPDP Analytics - Sample Comparison", width=1920, height=1080)
