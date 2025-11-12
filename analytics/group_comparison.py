@@ -18,8 +18,18 @@ import dearpygui.dearpygui as dpg
 parent_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(parent_dir))
 
-from functions.data_processing import load_and_process_data, compute_fft, find_top_extrema
-from config import SAMPLE_RATE, FFT_SMOOTHING_ENABLED, FFT_SMOOTHING_WINDOW
+from functions.data_processing import (
+    load_and_process_data,
+    compute_fft,
+    compute_fft_linear,
+    find_top_extrema,
+)
+from config import (
+    SAMPLE_RATE,
+    FFT_SMOOTHING_ENABLED,
+    FFT_SMOOTHING_WINDOW,
+    FFT_MAGNITUDE_MODE,
+)
 
 # Configuration
 SAMPLE_DIR = Path(__file__).parent / "sample"
@@ -114,31 +124,44 @@ class GroupAnalyzer:
                     print(f"  ⚠️  Failed to load {filename}")
                     continue
                 
-                # Compute FFT
-                freqs_ch1, mag_ch1 = compute_fft(
+                # Compute FFT (dB) for analysis/peaks
+                freqs_ch1_db, mag_ch1_db = compute_fft(
                     ch1, SAMPLE_RATE,
                     smooth=FFT_SMOOTHING_ENABLED,
                     smooth_window=FFT_SMOOTHING_WINDOW
                 )
-                freqs_ch2, mag_ch2 = compute_fft(
+                freqs_ch2_db, mag_ch2_db = compute_fft(
                     ch2, SAMPLE_RATE,
                     smooth=FFT_SMOOTHING_ENABLED,
                     smooth_window=FFT_SMOOTHING_WINDOW
                 )
-                
+
+                use_linear_display = FFT_MAGNITUDE_MODE.lower() == "linear"
+
+                display_freqs_ch1, display_mag_ch1 = freqs_ch1_db, mag_ch1_db
+                display_freqs_ch2, display_mag_ch2 = freqs_ch2_db, mag_ch2_db
+
+                if use_linear_display:
+                    display_freqs_ch1, display_mag_ch1 = compute_fft_linear(ch1, SAMPLE_RATE)
+                    display_freqs_ch2, display_mag_ch2 = compute_fft_linear(ch2, SAMPLE_RATE)
+
                 # Find peaks
                 peak_limit = self.export_peak_count
-                ch1_peaks, _ = find_top_extrema(freqs_ch1, mag_ch1, n_extrema=peak_limit)
-                ch2_peaks, _ = find_top_extrema(freqs_ch2, mag_ch2, n_extrema=peak_limit)
-                
+                ch1_peaks, _ = find_top_extrema(freqs_ch1_db, mag_ch1_db, n_extrema=peak_limit)
+                ch2_peaks, _ = find_top_extrema(freqs_ch2_db, mag_ch2_db, n_extrema=peak_limit)
+
                 # Store data
                 self.groups[group_name][filename] = {
                     'ch1_data': ch1,
                     'ch2_data': ch2,
-                    'freqs_ch1': freqs_ch1,
-                    'mag_ch1': mag_ch1,
-                    'freqs_ch2': freqs_ch2,
-                    'mag_ch2': mag_ch2,
+                    'freqs_ch1': display_freqs_ch1,
+                    'mag_ch1': display_mag_ch1,
+                    'freqs_ch2': display_freqs_ch2,
+                    'mag_ch2': display_mag_ch2,
+                    'freqs_ch1_db': freqs_ch1_db,
+                    'mag_ch1_db': mag_ch1_db,
+                    'freqs_ch2_db': freqs_ch2_db,
+                    'mag_ch2_db': mag_ch2_db,
                     'ch1_peaks': ch1_peaks,
                     'ch2_peaks': ch2_peaks,
                     'n_samples': n_samples

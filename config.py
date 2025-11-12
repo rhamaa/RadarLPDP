@@ -68,6 +68,9 @@ FFT_SAVGOL_WINDOW: int = 51
 FFT_SAVGOL_POLYORDER: int = 3
 """Savitzky-Golay polynomial order."""
 
+FFT_MAGNITUDE_MODE: str = "linear"
+"""Output magnitude scale for FFT ('linear' or 'db')."""
+
 FFT_MAGNITUDE_FLOOR_DB: float = -105.0
 """Clamp FFT magnitude to this floor to suppress noise grass (dB)."""
 

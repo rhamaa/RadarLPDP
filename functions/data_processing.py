@@ -34,6 +34,7 @@ from config import (
     FFT_SMOOTHING_WINDOW,
     FFT_SAVGOL_WINDOW,
     FFT_SAVGOL_POLYORDER,
+    FFT_MAGNITUDE_MODE,
     FFT_MAGNITUDE_FLOOR_DB,
     TARGET_FREQ_THRESHOLD_KHZ,
     FILTERED_EXTREMA_INDEX_THRESHOLD,
@@ -235,6 +236,34 @@ def compute_fft(
     frequencies_khz = rfftfreq(n, d=1.0 / sample_rate) / 1000.0
     
     return frequencies_khz, magnitudes_db
+
+
+def compute_fft_linear(
+    channel: NDArray[np.float32],
+    sample_rate: int
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Compute FFT spectrum magnitude in linear scale (no log, no smoothing).
+
+    Args:
+        channel: Input signal data
+        sample_rate: Sample rate in Hz
+
+    Returns:
+        Tuple of (frequencies_khz, magnitudes_linear)
+    """
+    n = len(channel)
+    if n == 0:
+        return np.array([], dtype=np.float64), np.array([], dtype=np.float64)
+
+    x = np.asarray(channel, dtype=np.float64)
+    fft_result = rfft(x)
+    magnitudes = np.abs(fft_result)
+    frequencies_khz = rfftfreq(n, d=1.0 / sample_rate) / 1000.0
+
+    return (
+        np.ascontiguousarray(frequencies_khz, dtype=np.float64),
+        np.ascontiguousarray(magnitudes, dtype=np.float64),
+    )
 
 def find_peak_metrics(
     frequencies: NDArray[np.float64],
@@ -713,6 +742,14 @@ def process_channel_data(
         smooth=FFT_SMOOTHING_ENABLED,
         smooth_window=FFT_SMOOTHING_WINDOW
     )
+
+    display_freqs_ch1, display_mag_ch1 = freqs_ch1, mag_ch1
+    display_freqs_ch2, display_mag_ch2 = freqs_ch2, mag_ch2
+
+    if FFT_MAGNITUDE_MODE.lower() == "linear":
+        display_freqs_ch1, display_mag_ch1 = compute_fft_linear(ch1_data, sample_rate)
+        display_freqs_ch2, display_mag_ch2 = compute_fft_linear(ch2_data, sample_rate)
+
     peak_freq_ch1, peak_mag_ch1 = find_peak_metrics(freqs_ch1, mag_ch1)
     peak_freq_ch2, peak_mag_ch2 = find_peak_metrics(freqs_ch2, mag_ch2)
 
@@ -749,9 +786,9 @@ def process_channel_data(
     fft_result = {
         "status": "done",
         "freqs_ch1": freqs_ch1,
-        "mag_ch1": mag_ch1,
+        "mag_ch1": display_mag_ch1,
         "freqs_ch2": freqs_ch2,
-        "mag_ch2": mag_ch2,
+        "mag_ch2": display_mag_ch2,
         "n_samples": n_samples,
         "sample_rate": sample_rate,
         "metrics": {
