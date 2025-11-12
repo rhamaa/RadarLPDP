@@ -40,6 +40,17 @@ from config import (
     FILTERED_EXTREMA_INDEX_THRESHOLD,
 )
 
+# --- Target Distance Defaults ---
+
+DISTANCE_MAG_THRESHOLD_DB: float = 65.0
+DISTANCE_FREQ_MIN_KHZ: float = 3_000.0
+DISTANCE_FREQ_MAX_KHZ: float = 8_000.0
+DISTANCE_MIN_INDEX: int = 0
+DISTANCE_MAX_INDEX: int = 4_096
+
+# Options: "auto" (pick strongest across both), "ch1", "ch2"
+DISTANCE_CHANNEL_MODE: str = "auto"
+
 # --- Coordinate Conversion Functions ---
 
 def polar_to_cartesian(
@@ -813,27 +824,77 @@ def process_channel_data(
     return fft_result, fft_result["metrics"]
 
 def calculate_target_distance(metrics: Optional[Dict[str, Any]]) -> Optional[float]:
-    """Calculate target distance based on peak metrics from both channels.
-    
+    """Estimate target distance using highest qualifying FFT peak index.
+
+    The computation selects the strongest peak (across both channels) that:
+        * lies within the configured frequency window
+        * has magnitude >= TARGET_DISTANCE_MAG_THRESHOLD_DB
+
+    The peak's FFT bin index is mapped linearly onto the radar range using
+    TARGET_DISTANCE_MIN_INDEX/TARGET_DISTANCE_MAX_INDEX.
+
     Args:
-        metrics: Dictionary containing ch1 and ch2 metrics
-        
+        metrics: Dictionary containing ch1 and ch2 metrics (see process_channel_data)
+
     Returns:
-        Calculated distance in meters, or None if invalid
+        Estimated distance in meters, or None if no qualifying peak is found.
     """
     if not metrics:
         return None
-    
-    # Get metrics from both channels
-    val_ch1 = metrics["ch1"]["peak_freq"] * metrics["ch1"]["peak_mag"]
-    val_ch2 = metrics["ch2"]["peak_freq"] * metrics["ch2"]["peak_mag"]
-    
-    # Combine values from both channels and normalize
-    distance = (val_ch1 + val_ch2) / 1000.0
-    
-    if distance > 1.0:
-        return min(distance, RADAR_MAX_RANGE)
-    return None
+
+    index_min = DISTANCE_MIN_INDEX
+    index_max = DISTANCE_MAX_INDEX
+    if index_max <= index_min:
+        return None
+
+    freq_min = DISTANCE_FREQ_MIN_KHZ
+    freq_max = DISTANCE_FREQ_MAX_KHZ
+    mag_threshold = DISTANCE_MAG_THRESHOLD_DB
+
+    best_candidate: Optional[Tuple[float, int]] = None  # (mag_db, index)
+
+    channel_mode = DISTANCE_CHANNEL_MODE.lower()
+    if channel_mode == "ch1":
+        channel_order = ("ch1",)
+    elif channel_mode == "ch2":
+        channel_order = ("ch2",)
+    else:
+        channel_order = ("ch1", "ch2")
+
+    for channel_key in channel_order:
+        channel_metrics = metrics.get(channel_key)
+        if not channel_metrics:
+            continue
+
+        for peak_list_key in ("filtered_peaks", "peaks"):
+            for peak in channel_metrics.get(peak_list_key, []):
+                peak_mag = peak.get("mag_db")
+                peak_freq = peak.get("freq_khz")
+                peak_index = peak.get("index")
+
+                if peak_mag is None or peak_freq is None or peak_index is None:
+                    continue
+                if peak_mag < mag_threshold:
+                    continue
+                if not (freq_min <= peak_freq <= freq_max):
+                    continue
+
+                if best_candidate is None or peak_mag > best_candidate[0]:
+                    best_candidate = (float(peak_mag), int(peak_index))
+
+    if not best_candidate:
+        return None
+
+    _, peak_index = best_candidate
+    clamped_index = max(index_min, min(index_max, peak_index))
+
+    normalized = (clamped_index - index_min) / (index_max - index_min)
+    distance = normalized * RADAR_MAX_RANGE
+
+    if distance <= 0:
+        return None
+
+    return float(min(distance, RADAR_MAX_RANGE))
 
 def update_sweep_angle(
     current_angle: float,
