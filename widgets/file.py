@@ -28,31 +28,14 @@ def refresh_log_files():
     except Exception as e:
         dpg.configure_item("log_file_list", items=[f"Error: {e}"])
 
-def open_file_analysis():
-    """Membuka popup window untuk analisis file yang dipilih."""
-    try:
-        # Import fungsi dari file_analyze_popup.py
-        from widgets.file_analyze_popup import open_file_analysis as popup_open_file_analysis
-        
-        # Call the popup function
-        popup_open_file_analysis()
-        
-    except Exception as e:
-        dpg.set_value("file_status_text", f"Error saat membuka analisis: {str(e)}")
-        print(f"Error in open_file_analysis: {e}")
-        import traceback
-        traceback.print_exc()
-
 def create_file_explorer_widget(parent, width, height):
     """Membuat widget untuk menampilkan file log dari direktori 'log'."""
     with dpg.group(parent=parent):
         dpg.add_text("Log File Explorer")
         with dpg.group(horizontal=True):
             dpg.add_button(label="Refresh", callback=refresh_log_files)
-            dpg.add_button(label="Analyze Selected", callback=open_file_analysis)
         
         dpg.add_listbox([], tag="log_file_list", num_items=8)
-        dpg.add_text("", tag="file_status_text")
         
         # Panggil sekali saat pembuatan untuk mengisi daftar awal
         refresh_log_files()

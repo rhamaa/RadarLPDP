@@ -40,17 +40,6 @@ from config import (
     FILTERED_EXTREMA_INDEX_THRESHOLD,
 )
 
-# --- Target Distance Defaults ---
-
-DISTANCE_MAG_THRESHOLD_DB: float = 65.0
-DISTANCE_FREQ_MIN_KHZ: float = 3_000.0
-DISTANCE_FREQ_MAX_KHZ: float = 8_000.0
-DISTANCE_MIN_INDEX: int = 0
-DISTANCE_MAX_INDEX: int = 4_096
-
-# Options: "auto" (pick strongest across both), "ch1", "ch2"
-DISTANCE_CHANNEL_MODE: str = "auto"
-
 # --- Coordinate Conversion Functions ---
 
 def polar_to_cartesian(
@@ -823,18 +812,31 @@ def process_channel_data(
     }
     return fft_result, fft_result["metrics"]
 
-def calculate_target_distance(metrics: Optional[Dict[str, Any]]) -> Optional[float]:
-    """Estimate target distance using highest qualifying FFT peak index.
+def calculate_target_distance(
+    metrics: Optional[Dict[str, Any]],
+    *,
+    mag_threshold_db: float = 65.0,
+    index_min: int = 0,
+    index_max: int = 4_096,
+    channel_mode: str = "auto",
+    max_range: float = RADAR_MAX_RANGE,
+) -> Optional[float]:
+    """Estimate target distance using the strongest qualifying FFT peak.
 
-    The computation selects the strongest peak (across both channels) that:
-        * lies within the configured frequency window
-        * has magnitude >= TARGET_DISTANCE_MAG_THRESHOLD_DB
-
-    The peak's FFT bin index is mapped linearly onto the radar range using
-    TARGET_DISTANCE_MIN_INDEX/TARGET_DISTANCE_MAX_INDEX.
+    Hanya puncak dengan indeks FFT di dalam ``[index_min, index_max]`` yang
+    dipertimbangkan. Puncak terkuat dengan magnitudo minimal ``mag_threshold_db``
+    dipetakan secara linear ke jarak radar menggunakan rentang indeks tersebut
+    dan ``max_range``.
 
     Args:
-        metrics: Dictionary containing ch1 and ch2 metrics (see process_channel_data)
+        metrics: Dictionary containing channel metrics from
+            :func:`process_channel_data`.
+        mag_threshold_db: Minimum magnitude (dB) required for a peak.
+        index_min: Minimum FFT bin index corresponding to zero distance.
+        index_max: Maximum FFT bin index corresponding to ``max_range``.
+        channel_mode: One of ``"auto"``, ``"ch1"``, or ``"ch2"`` determining
+            which channel(s) to inspect.
+        max_range: Maximum radar range in meters used for scaling.
 
     Returns:
         Estimated distance in meters, or None if no qualifying peak is found.
@@ -842,21 +844,15 @@ def calculate_target_distance(metrics: Optional[Dict[str, Any]]) -> Optional[flo
     if not metrics:
         return None
 
-    index_min = DISTANCE_MIN_INDEX
-    index_max = DISTANCE_MAX_INDEX
     if index_max <= index_min:
         return None
 
-    freq_min = DISTANCE_FREQ_MIN_KHZ
-    freq_max = DISTANCE_FREQ_MAX_KHZ
-    mag_threshold = DISTANCE_MAG_THRESHOLD_DB
-
     best_candidate: Optional[Tuple[float, int]] = None  # (mag_db, index)
 
-    channel_mode = DISTANCE_CHANNEL_MODE.lower()
-    if channel_mode == "ch1":
+    channel_mode_normalized = channel_mode.lower()
+    if channel_mode_normalized == "ch1":
         channel_order = ("ch1",)
-    elif channel_mode == "ch2":
+    elif channel_mode_normalized == "ch2":
         channel_order = ("ch2",)
     else:
         channel_order = ("ch1", "ch2")
@@ -869,14 +865,13 @@ def calculate_target_distance(metrics: Optional[Dict[str, Any]]) -> Optional[flo
         for peak_list_key in ("filtered_peaks", "peaks"):
             for peak in channel_metrics.get(peak_list_key, []):
                 peak_mag = peak.get("mag_db")
-                peak_freq = peak.get("freq_khz")
                 peak_index = peak.get("index")
 
-                if peak_mag is None or peak_freq is None or peak_index is None:
+                if peak_mag is None or peak_index is None:
                     continue
-                if peak_mag < mag_threshold:
+                if peak_mag < mag_threshold_db:
                     continue
-                if not (freq_min <= peak_freq <= freq_max):
+                if not (index_min <= peak_index <= index_max):
                     continue
 
                 if best_candidate is None or peak_mag > best_candidate[0]:
@@ -889,12 +884,12 @@ def calculate_target_distance(metrics: Optional[Dict[str, Any]]) -> Optional[flo
     clamped_index = max(index_min, min(index_max, peak_index))
 
     normalized = (clamped_index - index_min) / (index_max - index_min)
-    distance = normalized * RADAR_MAX_RANGE
+    distance = normalized * max_range
 
     if distance <= 0:
         return None
 
-    return float(min(distance, RADAR_MAX_RANGE))
+    return float(min(distance, max_range))
 
 def update_sweep_angle(
     current_angle: float,
