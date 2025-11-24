@@ -30,23 +30,25 @@ will detect and map to distance:
 USAGE:
 ======
 1. Run: python dumy_gen_ui.py
-2. Adjust CH1/CH3 parameters in UI:
-   - Amplitude: Signal strength (100-5000)
+2. Adjust CH1/CH3 parameters in UI (real-time, langsung apply):
+   - Amplitude: Signal strength in dB (30-120 dB)
    - Index Min/Max: Range of movement (1000-4096)
    - Enable/Disable: Turn targets on/off
 3. Set movement speed (1-50 indices per update)
 4. Click "Start Simulation"
 5. Targets will move back-and-forth within configured ranges
+6. Adjust parameters WHILE running → changes apply immediately to output .bin
 
 FEATURES:
 =========
 - Tkinter UI for real-time control
-- Adjustable amplitude for CH1 and CH3
+- dB-based amplitude control (30-120 dB) for CH1 and CH3
 - Configurable target movement range (FFT index)
 - Variable movement speed (1-50 indices/update)
 - Independent enable/disable per channel
-- Thread-safe parameter updates
+- Thread-safe parameter updates with immediate effect
 - Real-time position monitoring
+- On-the-fly parameter adjustment (no need to stop/restart)
 
 OUTPUT FORMAT:
 ==============
@@ -66,23 +68,35 @@ SIGNAL GENERATION DETAILS:
 EXAMPLE SCENARIOS:
 ==================
 1. Single Target at 50m:
-   - CH1: Enable, Amplitude=1500, Index=3000-3100, Speed=5
+   - CH1: Enable, Amplitude=85 dB, Index=3000-3100, Speed=5
    - CH3: Disable
    
 2. Two Targets (near & far):
-   - CH1: Enable, Index=2600-2800 (near), Amplitude=1200
-   - CH3: Enable, Index=3800-4000 (far), Amplitude=1000
+   - CH1: Enable, Index=2600-2800 (near), Amplitude=80 dB
+   - CH3: Enable, Index=3800-4000 (far), Amplitude=75 dB
    
 3. Fast Moving Target:
-   - CH1: Enable, Index=2500-4000 (full range), Speed=40
+   - CH1: Enable, Index=2500-4000 (full range), Amplitude=90 dB, Speed=40
    - CH3: Disable
+
+4. Weak Signal Testing (threshold testing):
+   - CH1: Enable, Amplitude=50 dB (weak), Index=3000-3200, Speed=5
+   - CH3: Disable
+   - Adjust amplitude up until detected (biasanya >65 dB)
+
+5. Strong Signal Multiple Targets:
+   - CH1: Enable, Amplitude=100 dB, Index=2500-3000
+   - CH3: Enable, Amplitude=95 dB, Index=3500-4000
+   - Speed=20
 
 TROUBLESHOOTING:
 ================
-- Target not detected: Increase amplitude (>1000) or check index range (2500-4096)
-- UI unresponsive: Stop simulation, adjust parameters, restart
+- Target not detected: Increase amplitude (>70 dB) or check index range (2500-4096)
+- Weak signal: Default detection threshold ~65 dB, naikkan amplitude di UI
+- UI unresponsive: Parameter changes are real-time, no need to stop/restart
 - No data written: Check folder permissions for 'live/' directory
 - Erratic behavior: Lower movement speed or reduce noise level
+- Real-time not working: Check state.lock implementation (already thread-safe)
 
 TECHNICAL NOTES:
 ================
@@ -90,11 +104,20 @@ TECHNICAL NOTES:
 - Sample Rate: 20 MHz
 - Freq Resolution: ~2.44 kHz/bin
 - Detection Range: Index 2500-4096 → 6.1-10.0 MHz
+- Amplitude Range: 30-120 dB (converted to linear: 10^(dB/20))
+- dB Conversion Examples:
+  * 30 dB → amplitude ~31.6
+  * 60 dB → amplitude ~1000
+  * 80 dB → amplitude ~10000
+  * 100 dB → amplitude ~100000
+  * 120 dB → amplitude ~1000000
 - Thread Model: UI in main thread, generation in background daemon thread
 - State Sync: Lock-based synchronization between threads
+- Real-time Update: Slider changes instantly apply via state.lock (thread-safe)
+- Update Latency: <50ms (next frame akan gunakan nilai baru)
 
 AUTHOR: Raihan Muhammad - Radar LPDP Project
-VERSION: 1.0
+VERSION: 2.0 - dB Control & Real-time Update
 """
 
 import os
@@ -117,31 +140,59 @@ FREQ_RESOLUTION: float = SAMPLE_RATE / FFT_SIZE  # ~2441 Hz per bin
 # Update interval
 UPDATE_INTERVAL: float = 0.05  # 50ms (~20 Hz update rate)
 
-# Default signal parameters
-DEFAULT_CH1_AMPLITUDE: int = 1000
-DEFAULT_CH3_AMPLITUDE: int = 800
+# Default signal parameters (in dB)
+DEFAULT_CH1_AMPLITUDE_DB: float = 80.0  # dB
+DEFAULT_CH3_AMPLITUDE_DB: float = 75.0  # dB
 DEFAULT_NOISE_LEVEL: int = 100
 DEFAULT_INDEX_MIN: int = 2500
 DEFAULT_INDEX_MAX: int = 4000
 DEFAULT_MOVEMENT_SPEED: int = 10  # indices per update
 
+# Amplitude dB range
+AMPLITUDE_DB_MIN: float = 30.0
+AMPLITUDE_DB_MAX: float = 120.0
+AMPLITUDE_REFERENCE: float = 1.0  # Reference for dB conversion
+
+def db_to_linear_amplitude(db: float, reference: float = AMPLITUDE_REFERENCE) -> float:
+    """Convert dB to linear amplitude.
+    
+    Formula: amplitude = reference * 10^(dB/20)
+    
+    Args:
+        db: Amplitude in decibels
+        reference: Reference amplitude (default 1.0)
+        
+    Returns:
+        Linear amplitude value
+    
+    Example:
+        80 dB -> ~10000 linear amplitude
+        60 dB -> ~1000 linear amplitude
+    """
+    return reference * (10.0 ** (db / 20.0))
+
+
 # Simulation state - will be controlled by UI
 class SimulationState:
-    """Thread-safe simulation state."""
+    """Thread-safe simulation state.
+    
+    Note: Amplitudes are stored in dB and converted to linear when generating signals.
+    This allows for more intuitive control and better dynamic range.
+    """
     def __init__(self):
         self.lock = threading.Lock()
         self.running = False
         
-        # CH1 settings
-        self.ch1_amplitude = DEFAULT_CH1_AMPLITUDE
+        # CH1 settings (amplitude in dB)
+        self.ch1_amplitude_db = DEFAULT_CH1_AMPLITUDE_DB
         self.ch1_index_min = DEFAULT_INDEX_MIN
         self.ch1_index_max = DEFAULT_INDEX_MAX
         self.ch1_enabled = True
         self.ch1_current_index = DEFAULT_INDEX_MIN
         self.ch1_direction = 1  # 1 = forward, -1 = backward
         
-        # CH3 settings
-        self.ch3_amplitude = DEFAULT_CH3_AMPLITUDE
+        # CH3 settings (amplitude in dB)
+        self.ch3_amplitude_db = DEFAULT_CH3_AMPLITUDE_DB
         self.ch3_index_min = DEFAULT_INDEX_MIN
         self.ch3_index_max = DEFAULT_INDEX_MAX + 500  # Offset untuk variasi
         self.ch3_enabled = True
@@ -153,15 +204,17 @@ class SimulationState:
         self.noise_level = DEFAULT_NOISE_LEVEL
     
     def get_state(self) -> Dict[str, Any]:
-        """Get current state snapshot."""
+        """Get current state snapshot with linear amplitude conversion."""
         with self.lock:
             return {
-                'ch1_amplitude': self.ch1_amplitude,
+                'ch1_amplitude_db': self.ch1_amplitude_db,
+                'ch1_amplitude': db_to_linear_amplitude(self.ch1_amplitude_db),
                 'ch1_index_min': self.ch1_index_min,
                 'ch1_index_max': self.ch1_index_max,
                 'ch1_enabled': self.ch1_enabled,
                 'ch1_current_index': self.ch1_current_index,
-                'ch3_amplitude': self.ch3_amplitude,
+                'ch3_amplitude_db': self.ch3_amplitude_db,
+                'ch3_amplitude': db_to_linear_amplitude(self.ch3_amplitude_db),
                 'ch3_index_min': self.ch3_index_min,
                 'ch3_index_max': self.ch3_index_max,
                 'ch3_enabled': self.ch3_enabled,
@@ -441,13 +494,13 @@ class RadarSimulatorUI:
             command=self.on_ch1_enabled_changed
         ).grid(row=0, column=0, columnspan=2, pady=5)
         
-        ttk.Label(ch1_frame, text="Amplitude:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(ch1_frame, text="Amplitude (dB):").grid(row=1, column=0, sticky=tk.W)
         self.ch1_amp_scale = ttk.Scale(
-            ch1_frame, from_=100, to=5000, orient=tk.HORIZONTAL
+            ch1_frame, from_=AMPLITUDE_DB_MIN, to=AMPLITUDE_DB_MAX, orient=tk.HORIZONTAL
         )
-        self.ch1_amp_scale.set(DEFAULT_CH1_AMPLITUDE)
+        self.ch1_amp_scale.set(DEFAULT_CH1_AMPLITUDE_DB)
         self.ch1_amp_scale.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.ch1_amp_label = ttk.Label(ch1_frame, text=f"{DEFAULT_CH1_AMPLITUDE}")
+        self.ch1_amp_label = ttk.Label(ch1_frame, text=f"{DEFAULT_CH1_AMPLITUDE_DB:.1f} dB")
         self.ch1_amp_label.grid(row=1, column=2)
         
         ttk.Label(ch1_frame, text="Index Min:").grid(row=2, column=0, sticky=tk.W)
@@ -487,13 +540,13 @@ class RadarSimulatorUI:
             command=self.on_ch3_enabled_changed
         ).grid(row=0, column=0, columnspan=2, pady=5)
         
-        ttk.Label(ch3_frame, text="Amplitude:").grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(ch3_frame, text="Amplitude (dB):").grid(row=1, column=0, sticky=tk.W)
         self.ch3_amp_scale = ttk.Scale(
-            ch3_frame, from_=100, to=5000, orient=tk.HORIZONTAL
+            ch3_frame, from_=AMPLITUDE_DB_MIN, to=AMPLITUDE_DB_MAX, orient=tk.HORIZONTAL
         )
-        self.ch3_amp_scale.set(DEFAULT_CH3_AMPLITUDE)
+        self.ch3_amp_scale.set(DEFAULT_CH3_AMPLITUDE_DB)
         self.ch3_amp_scale.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5)
-        self.ch3_amp_label = ttk.Label(ch3_frame, text=f"{DEFAULT_CH3_AMPLITUDE}")
+        self.ch3_amp_label = ttk.Label(ch3_frame, text=f"{DEFAULT_CH3_AMPLITUDE_DB:.1f} dB")
         self.ch3_amp_label.grid(row=1, column=2)
         
         ttk.Label(ch3_frame, text="Index Min:").grid(row=2, column=0, sticky=tk.W)
@@ -576,6 +629,7 @@ class RadarSimulatorUI:
         # Info Label
         info_text = (
             "ℹ️ Info: Target peaks akan bergerak bolak-balik dalam range yang ditentukan.\n"
+            "Amplitude: 30-120 dB (real-time control, langsung apply ke output .bin)\n"
             "FFT Index → Frequency: freq(MHz) = (index / 8192) × 20 MHz\n"
             "Range deteksi default: 2500-4096 → 6.1-10.0 MHz"
         )
@@ -600,9 +654,11 @@ class RadarSimulatorUI:
         self.update_status_text(f"CH1 target {'enabled' if enabled else 'disabled'}")
     
     def on_ch1_amplitude_changed(self, value):
-        amp = int(value)
-        state.update_ch1(amplitude=amp)
-        self.ch1_amp_label.config(text=f"{amp}")
+        amp_db = float(value)
+        with state.lock:
+            state.ch1_amplitude_db = amp_db
+        self.ch1_amp_label.config(text=f"{amp_db:.1f} dB")
+        # Real-time: perubahan langsung apply karena state.lock thread-safe
     
     def on_ch1_min_changed(self, value):
         min_idx = int(value)
@@ -628,9 +684,11 @@ class RadarSimulatorUI:
         self.update_status_text(f"CH3 target {'enabled' if enabled else 'disabled'}")
     
     def on_ch3_amplitude_changed(self, value):
-        amp = int(value)
-        state.update_ch3(amplitude=amp)
-        self.ch3_amp_label.config(text=f"{amp}")
+        amp_db = float(value)
+        with state.lock:
+            state.ch3_amplitude_db = amp_db
+        self.ch3_amp_label.config(text=f"{amp_db:.1f} dB")
+        # Real-time: perubahan langsung apply karena state.lock thread-safe
     
     def on_ch3_min_changed(self, value):
         min_idx = int(value)

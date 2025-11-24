@@ -815,7 +815,7 @@ def process_channel_data(
 def calculate_target_distance(
     metrics: Optional[Dict[str, Any]],
     *,
-    mag_threshold_db: float = 65.0,
+    mag_threshold_db: float = 80.0,
     index_min: int = 2_500,
     index_max: int = 4_096,
     channel_mode: str = "auto",
