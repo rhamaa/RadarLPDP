@@ -1,56 +1,3 @@
-<<<<<<< HEAD
-# config.py
-import os
-
-# --- Konfigurasi Aplikasi ---
-
-# Tentukan direktori root proyek secara dinamis
-# Ini adalah direktori tempat file main.py berada
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
-# --- Konfigurasi Background Worker Eksternal ---
-# Ubah nama/path exe di sini. Secara default hanya dijalankan di Windows.
-# Di Linux/macOS, set only_on_platforms=[] dan sesuaikan exe_name (misal gunakan wine) jika ingin tetap dijalankan.
-EXTERNAL_WORKER = {
-    "enabled": True,
-    "exe_name": "cadgetdata.exe",  # bisa nama file relatif atau path absolut
-    "args": [],                         # contoh: ["--port", "9000"]
-    "cwd": None,                        # None = otomatis ke direktori file exe
-    "env": {},                          # tambahan environment variables
-    "only_on_platforms": ["win32"],    # ganti ke [] untuk semua OS
-}
-
-# --- Konfigurasi Pemantauan File ---
-# Nama file data yang akan dipantau. Path ini sekarang absolut dan andal.
-FILENAME_BASE = "live/live_acquisition_ui.bin"
-FILENAME = os.path.join(PROJECT_ROOT, FILENAME_BASE)
-
-# Rate sampling data dari akuisisi (dalam Hz)
-SAMPLE_RATE = 20_000_000  # 20 MHz
-
-# Seberapa sering (dalam detik) memeriksa pembaruan file
-POLLING_INTERVAL = 0.5  # Detik (sudah tidak digunakan oleh fft_worker)
-WORKER_REFRESH_INTERVAL = 0.05 # Detik, untuk refresh UI ~20 FPSali per detik
-
-# --- Pengaturan Serial Port ---
-SERIAL_PORT = 'COM9'  # Port untuk ESP32/Arduino
-BAUD_RATE = 115200            # Harus sama dengan yang di kode Arduino
-SERIAL_TIMEOUT = 1            # Timeout untuk pembacaan serial (dalam detik)
-
-# --- Konfigurasi Tampilan ---
-APP_SPACING = 8
-APP_PADDING = 8
-
-# Palet warna yang konsisten untuk tema aplikasi
-THEME_COLORS = {
-    "background": (21, 21, 21, 255),      # Latar belakang yang sangat gelap
-    "scan_area": (37, 37, 38, 150),       # Area scan yang sedikit transparan
-    "grid_lines": (255, 255, 255, 40),    # Garis putih yang sangat pudar
-    "text": (255, 255, 255, 150),         # Teks putih yang tidak terlalu mencolok
-    "accent": (0, 200, 119, 255),         # Warna hijau/teal untuk sapuan jarum
-    "target": (255, 0, 0, 255),           # Merah terang untuk target
-}
-=======
 """Configuration module for Radar LPDP application.
 
 This module contains all configuration constants and settings for the radar system,
@@ -70,7 +17,7 @@ PROJECT_ROOT: Path = Path(__file__).parent.absolute()
 
 EXTERNAL_WORKER: Dict[str, Any] = {
     "enabled": True,
-    "exe_name": "cadgetdataSave.exe",
+    "exe_name": "cadgetdata.exe",
     "args": [],
     "cwd": None,
     "env": {},
@@ -146,7 +93,7 @@ FILTERED_EXTREMA_INDEX_THRESHOLD: int = 2000
 
 # --- Serial Port Configuration ---
 
-SERIAL_PORT: str = '/dev/ttyUSB0'
+SERIAL_PORT: str = 'COM9'
 """Serial port for ESP32/Arduino communication."""
 
 BAUD_RATE: int = 115200
@@ -187,4 +134,3 @@ RADAR_SWEEP_ANGLE_MIN: float = 0.0
 
 RADAR_SWEEP_ANGLE_MAX: float = 180.0
 """Maximum sweep angle in degrees."""
->>>>>>> ecb4947d480b793a4e8317e42ddd693ce8163b2d
