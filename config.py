@@ -13,7 +13,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 # Di Linux/macOS, set only_on_platforms=[] dan sesuaikan exe_name (misal gunakan wine) jika ingin tetap dijalankan.
 EXTERNAL_WORKER = {
     "enabled": True,
-    "exe_name": "cadgetdataSave.exe",  # bisa nama file relatif atau path absolut
+    "exe_name": "cadgetdata.exe",  # bisa nama file relatif atau path absolut
     "args": [],                         # contoh: ["--port", "9000"]
     "cwd": None,                        # None = otomatis ke direktori file exe
     "env": {},                          # tambahan environment variables
