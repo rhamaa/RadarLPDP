@@ -1,18 +1,25 @@
-# main.py
-# File ini hanya bertanggung jawab untuk mendefinisikan layout UI dan menjalankan aplikasi.
+"""Main entry point for Radar LPDP application.
 
+This file is responsible for defining the UI layout and running the application.
+"""
+
+# Standard library
+import atexit
+
+# Third-party
 import dearpygui.dearpygui as dpg
 
-# Impor fungsi setup dan callback dari modul terpisah
-from app.setup import setup_dpg, initialize_queues_and_events, start_worker_threads
-from app.callbacks import update_ui_from_queues, cleanup_and_exit, resize_callback
-import atexit
-from config import EXTERNAL_WORKER
+# Local - app modules
+from app.callbacks import cleanup_and_exit, resize_callback, update_ui_from_queues
 from app.external_process import start_worker, stop_worker
+from app.setup import initialize_queues_and_events, setup_dpg, start_worker_threads
 
-# Impor semua widget UI
-from widgets.PPI import create_ppi_widget
+# Local - config
+from config import EXTERNAL_WORKER
+
+# Local - widgets
 from widgets.FFT import create_fft_widget
+from widgets.PPI import create_ppi_widget
 from widgets.Sinewave import create_sinewave_widget
 from widgets.file import create_file_explorer_widget
 from widgets.logo import create_logo_widget
